@@ -1,0 +1,21 @@
+[project]
+name = "resource-based-economy-strategy"
+version = "0.0.1"
+description = "Resource-only economy strategy simulation prototype."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "Pavel Churkin" }
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Games/Entertainment :: Simulation",
+]
+
+[project.scripts]
+rbes-sim = "resource_based_economy_strategy.cli:main"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
