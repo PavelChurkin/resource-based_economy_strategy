@@ -1,43 +1,5 @@
 # resource-based_economy_strategy
 
-Симуляция РОЭ в игровой форме.
-
-Эта ветка добавляет планетарный слой версии `0.01` для движка ресурсной
-стратегии. Пакет `game1/` содержит самодостаточные модули, использующие
-только стандартную библиотеку Python:
-
-- `game1.planet` — полигональная сфера-планета из тайлов с биомом, высотой
-  рельефа и реками. По высоте перепада реки оценивается потенциал ГЭС.
-- `game1.climate` — климат с циклонами и антициклонами: циклон даёт осадки
-  и забирает солнце, антициклон делает наоборот, переход усиливает ветер.
-- `game1.tech_tree` — загрузчик дерева технологий, совместимый со схемой
-  [`techno2.json`](https://github.com/PavelChurkin/tech_tree0.4/blob/main/techno2.json):
-  поддерживает плоские условия (AND) и вложенные списки (OR-of-AND).
-- `game1.time_control` — контроллер времени с режимами pause / normal
-  (10 c за день) / fast (1 c за день) и пропуском недель, месяцев и лет
-  через экстраполяцию ежедневной статистики.
-
-Подробное описание решений: [`docs/issue-3-design.md`](docs/issue-3-design.md).
-
-## Запуск
-
-Не требует внешних зависимостей.
-
-```bash
-python examples/run_planet_tour.py
-python examples/run_time_control.py
-```
-
-## Тесты
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-
-=====
-
-
 Симуляция ресурсно-ориентированной экономики в игровой форме.
 
 Версия `0.01` в этом репозитории начинается с проверяемого Python-ядра:
@@ -51,21 +13,37 @@ python -m unittest discover -s tests -v
   леса;
 - погода влияет на солнечную, ветровую и водную генерацию;
 - `fast_forward()` пропускает несколько дней и возвращает статистику
-  удовлетворения потребностей.
+  удовлетворения потребностей;
+- управляемый запуск игры идёт через один файл входа:
+  `python -m resource_based_economy_strategy`;
+- игра завершается при смерти всех жителей или при вводе пользователем `0`;
+- генерация стартового мира может учитывать зерно `--seed`.
 
 Подробное описание механик находится в
 [`docs/version-0.01-design.md`](docs/version-0.01-design.md).
+Планетарный слой, климат, время и дерево технологий описаны в
+[`docs/issue-3-design.md`](docs/issue-3-design.md).
 
 ## Запуск
 
+Проект не требует внешних Python-зависимостей.
+
 ```bash
-python -m resource_based_economy_strategy --days 30 --people 6
+python -m resource_based_economy_strategy --days 30 --people 6 --seed 42
 ```
 
-Пример двухнедельной симуляции:
+Для автоматического прогона без ожидания ввода:
+
+```bash
+python -m resource_based_economy_strategy --days 30 --people 6 --seed 42 --auto
+```
+
+Дополнительные демонстрации:
 
 ```bash
 python examples/run_day_simulation.py
+python examples/run_planet_tour.py
+python examples/run_time_control.py
 ```
 
 ## Проверка
@@ -74,5 +52,3 @@ python examples/run_day_simulation.py
 python -m unittest discover -s tests
 python -m compileall resource_based_economy_strategy examples tests
 ```
-
-Проект пока не требует внешних Python-зависимостей.

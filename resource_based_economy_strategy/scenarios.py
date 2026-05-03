@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from game1.planet import build_demo_planet
 from resource_based_economy_strategy.simulation import Building, Settlement, Weather
 
 
@@ -10,14 +11,18 @@ def create_empty_map_settlement(
     latitude: float = 45.0,
     seed: int | None = None,
 ) -> Settlement:
-    """Create the first camp on an empty map.
+    """Создать первый лагерь на пустой карте."""
 
-    The seed is accepted now to keep scenario construction stable when stochastic
-    events are added later. The current prototype is deterministic.
-    """
-
-    del seed
     inventory = dict(initial_resources or {})
+    if seed is not None:
+        planet = build_demo_planet(seed=seed)
+        closest_tile = min(planet, key=lambda tile: abs(tile.latitude - latitude))
+        for resource, amount in closest_tile.resources.items():
+            inventory[resource] = inventory.get(resource, 0.0) + amount * 0.1
+        if closest_tile.terrain.has_river:
+            inventory["water"] = inventory.get("water", 0.0) + 30.0
+        latitude = closest_tile.latitude
+
     settlement = Settlement(
         people=people,
         inventory=inventory,

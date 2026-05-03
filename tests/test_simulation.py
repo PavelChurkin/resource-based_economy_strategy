@@ -1,5 +1,7 @@
 import unittest
+from io import StringIO
 
+from resource_based_economy_strategy.cli import run_managed_simulation
 from resource_based_economy_strategy.scenarios import create_empty_map_settlement
 from resource_based_economy_strategy.simulation import (
     Building,
@@ -157,6 +159,69 @@ class ResourceBasedSimulationTest(unittest.TestCase):
         self.assertEqual(settlement.inventory["plank"], 3)
         self.assertEqual(settlement.inventory["sawdust"], 1)
         self.assertLess(settlement.inventory["wood"], 6)
+
+    def test_seed_adds_repeatable_world_resources(self) -> None:
+        first = create_empty_map_settlement(
+            people=3,
+            initial_resources={"food": 30, "water": 30},
+            latitude=45,
+            seed=7,
+        )
+        second = create_empty_map_settlement(
+            people=3,
+            initial_resources={"food": 30, "water": 30},
+            latitude=45,
+            seed=7,
+        )
+        different = create_empty_map_settlement(
+            people=3,
+            initial_resources={"food": 30, "water": 30},
+            latitude=45,
+            seed=8,
+        )
+
+        self.assertEqual(first.inventory, second.inventory)
+        self.assertNotEqual(first.inventory, different.inventory)
+
+    def test_managed_simulation_stops_when_user_enters_zero(self) -> None:
+        settlement = create_empty_map_settlement(
+            people=3,
+            initial_resources={"food": 30, "water": 30},
+        )
+        output = StringIO()
+
+        reason = run_managed_simulation(
+            settlement,
+            days=5,
+            input_func=lambda _prompt: "0",
+            output=output,
+        )
+
+        self.assertEqual(settlement.day, 0)
+        self.assertIn('командой "0"', reason)
+        self.assertIn("Ресурсная стратегия 0.01", output.getvalue())
+
+    def test_managed_simulation_stops_when_everyone_dies(self) -> None:
+        settlement = Settlement(
+            people=1,
+            inventory={},
+            buildings=[],
+            config=SimulationConfig(unmet_need_health_penalty=1.0),
+            weather=Weather.stable(),
+            health=0.1,
+        )
+        output = StringIO()
+
+        reason = run_managed_simulation(
+            settlement,
+            days=10,
+            auto=True,
+            output=output,
+        )
+
+        self.assertEqual(settlement.people, 0)
+        self.assertIn("все жители погибли", reason)
+        self.assertIn("Игра окончена", output.getvalue())
 
 
 if __name__ == "__main__":
