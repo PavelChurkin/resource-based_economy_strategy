@@ -15,6 +15,15 @@ core can run on the modest server profile mentioned in the issue.
 
 from .planet import Planet, PlanetTile, Terrain, build_demo_planet
 from .climate import Climate, PressureSystem, TileWeather
+from .hex_sphere import (
+    CellEvent,
+    CellSpatialIndex,
+    HexSphereCell,
+    HexSphereChunk,
+    HexSphereMesh,
+    Isea3hGridSpec,
+    build_hex_sphere_mesh,
+)
 from .tech_tree import Technology, TechTree, load_tech_tree, parse_tech_tree
 from .time_control import TimeController, TimeMode
 
@@ -26,6 +35,13 @@ __all__ = [
     "Climate",
     "PressureSystem",
     "TileWeather",
+    "CellEvent",
+    "CellSpatialIndex",
+    "HexSphereCell",
+    "HexSphereChunk",
+    "HexSphereMesh",
+    "Isea3hGridSpec",
+    "build_hex_sphere_mesh",
     "Technology",
     "TechTree",
     "load_tech_tree",

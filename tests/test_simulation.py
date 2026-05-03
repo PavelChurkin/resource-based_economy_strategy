@@ -199,7 +199,7 @@ class ResourceBasedSimulationTest(unittest.TestCase):
 
         self.assertEqual(settlement.day, 0)
         self.assertIn('командой "0"', reason)
-        self.assertIn("Ресурсная стратегия 0.01", output.getvalue())
+        self.assertIn("Ресурсная стратегия 0.0.2", output.getvalue())
 
     def test_managed_simulation_stops_when_everyone_dies(self) -> None:
         settlement = Settlement(

@@ -2,7 +2,17 @@
 
 Симуляция ресурсно-ориентированной экономики в игровой форме.
 
-Версия `0.01` в этом репозитории начинается с проверяемого Python-ядра:
+Версия `0.0.2` добавляет первый планетарный слой для будущего клиента:
+
+- логическая сетка `ISEA3H` с aperture 3 и оценкой разрешения под гекс
+  около 10 метров на планете радиусом в 10 раз меньше Земли;
+- процедурный полигональный меш сферы из гексагонов и 12 обязательных
+  пентагонов без материализации миллиардов ячеек;
+- чанки, пространственный индекс и формат событий вида
+  `игрок начал стройку в #<id>`, чтобы передавать действия, а не полигоны;
+- статический HTML-просмотрщик, где шар можно вращать и масштабировать.
+
+Базовое проверяемое Python-ядро симуляции сохраняет механику версии `0.0.1`:
 
 - нет денег, валюты и рыночных цен, только ресурсы;
 - один такт симуляции равен одному игровому дню;
@@ -23,6 +33,8 @@
 [`docs/version-0.01-design.md`](docs/version-0.01-design.md).
 Планетарный слой, климат, время и дерево технологий описаны в
 [`docs/issue-3-design.md`](docs/issue-3-design.md).
+Новый слой гекс-сферы и визуализации описан в
+[`docs/version-0.0.2-design.md`](docs/version-0.0.2-design.md).
 
 ## Запуск
 
@@ -42,13 +54,17 @@ python -m resource_based_economy_strategy --days 30 --people 6 --seed 42 --auto
 
 ```bash
 python examples/run_day_simulation.py
+python examples/run_hex_sphere_viewer.py
 python examples/run_planet_tour.py
 python examples/run_time_control.py
 ```
+
+После генерации просмотрщик открывается как обычный файл:
+[`examples/hex_sphere_viewer.html`](examples/hex_sphere_viewer.html).
 
 ## Проверка
 
 ```bash
 python -m unittest discover -s tests
-python -m compileall resource_based_economy_strategy examples tests
+python -m compileall resource_based_economy_strategy game1 examples tests
 ```
