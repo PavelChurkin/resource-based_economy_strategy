@@ -2,6 +2,14 @@
 
 Симуляция ресурсно-ориентированной экономики в игровой форме.
 
+Версия `0.0.4` уходит с 2D-канвы на настоящий 3D: появился
+WebGL2-просмотрщик планеты, рисующий её как сферическое облако точек,
+полученное Фибоначчиевой решёткой. Ладдер LOD теперь оперирует точками
+(`2 000 → 20 000 → 200 000`) при логических 10 000 000 на сервере — к
+каждой точке в будущих версиях можно будет привязать 3D-модель здания
+или подвижного транспорта, прорисовываемую только на нужном зуме.
+Управление и пороги переключения LOD совпадают с 0.0.3.
+
 Версия `0.0.3` улучшает планетарный просмотрщик: к мыши и колесу
 добавилось управление с клавиатуры (`WASD` для вращения, `QE` для крена,
 `+`/`-` для зума, `R` для сброса), а одно фиксированное разрешение
@@ -44,6 +52,8 @@
 [`docs/version-0.0.2-design.md`](docs/version-0.0.2-design.md).
 Дополнения версии 0.0.3 (WASD, LOD, заметки про текстуры и 3D-здания)
 описаны в [`docs/version-0.0.3-design.md`](docs/version-0.0.3-design.md).
+Переход на WebGL и сферическое облако точек версии 0.0.4 описан в
+[`docs/version-0.0.4-design.md`](docs/version-0.0.4-design.md).
 
 ## Запуск
 
@@ -64,12 +74,16 @@ python -m resource_based_economy_strategy --days 30 --people 6 --seed 42 --auto
 ```bash
 python examples/run_day_simulation.py
 python examples/run_hex_sphere_viewer.py
+python examples/run_webgl_planet_viewer.py
 python examples/run_planet_tour.py
 python examples/run_time_control.py
 ```
 
 После генерации просмотрщик открывается как обычный файл:
-[`examples/hex_sphere_viewer.html`](examples/hex_sphere_viewer.html).
+[`examples/hex_sphere_viewer.html`](examples/hex_sphere_viewer.html) —
+2D-канва с гекс-сферой версии 0.0.3, и
+[`examples/webgl_planet_viewer.html`](examples/webgl_planet_viewer.html) —
+WebGL2-просмотрщик сферического облака точек версии 0.0.4.
 
 ## Проверка
 
