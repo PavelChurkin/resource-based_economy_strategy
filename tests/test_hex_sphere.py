@@ -6,7 +6,12 @@ from game1.hex_sphere import (
     CellEvent,
     CellSpatialIndex,
     Isea3hGridSpec,
+    build_hex_sphere_lod_payload,
     build_hex_sphere_mesh,
+)
+from game1.hex_sphere_viewer import (
+    render_lod_viewer_html,
+    render_viewer_html,
 )
 
 
@@ -81,6 +86,63 @@ class HexSphereMeshTests(unittest.TestCase):
         self.assertEqual(wire["cell"], f"#{mesh.cells[0].id}")
         self.assertNotIn("boundary", wire)
         self.assertNotIn("vertices", wire)
+
+
+class HexSphereLodPayloadTests(unittest.TestCase):
+    def test_lod_payload_orders_resolutions_low_to_high(self) -> None:
+        payload = build_hex_sphere_lod_payload(grid_resolutions=(4, 2))
+
+        self.assertEqual(payload["kind"], "lod")
+        self.assertEqual(len(payload["levels"]), 2)
+        self.assertEqual(payload["levels"][0]["grid"]["resolution"], 2)
+        self.assertEqual(payload["levels"][1]["grid"]["resolution"], 4)
+        self.assertEqual(len(payload["zoomThresholds"]), 1)
+
+    def test_lod_payload_default_levels_grow(self) -> None:
+        payload = build_hex_sphere_lod_payload(grid_resolutions=(2, 4, 6))
+
+        cells_per_level = [
+            level["grid"]["renderCellCount"] for level in payload["levels"]
+        ]
+        self.assertEqual(cells_per_level, [92, 812, 7292])
+        self.assertEqual(payload["zoomThresholds"], [1.0, 1.6])
+
+    def test_lod_payload_validates_thresholds_length(self) -> None:
+        with self.assertRaises(ValueError):
+            build_hex_sphere_lod_payload(
+                grid_resolutions=(2, 4),
+                zoom_thresholds=(1.0, 2.0),
+            )
+
+    def test_lod_payload_requires_resolutions(self) -> None:
+        with self.assertRaises(ValueError):
+            build_hex_sphere_lod_payload(grid_resolutions=())
+
+
+class HexSphereViewerHtmlTests(unittest.TestCase):
+    def test_legacy_render_viewer_wraps_single_level_payload(self) -> None:
+        mesh = build_hex_sphere_mesh(frequency=3, grid_resolution=2)
+
+        html = render_viewer_html(mesh)
+
+        self.assertIn('"kind":"lod"', html)
+        self.assertIn('"renderCellCount":92', html)
+        for letter in ("W", "A", "S", "D"):
+            self.assertIn(f"<kbd>{letter}</kbd>", html)
+
+    def test_lod_viewer_html_contains_keyboard_shortcut_hints(self) -> None:
+        payload = build_hex_sphere_lod_payload(grid_resolutions=(2, 4))
+
+        html = render_lod_viewer_html(payload)
+
+        for letter in ("W", "A", "S", "D"):
+            self.assertIn(f"<kbd>{letter}</kbd>", html)
+        self.assertIn("requestAnimationFrame", html)
+        self.assertIn("zoomThresholds", html)
+
+    def test_render_lod_viewer_rejects_non_lod_payload(self) -> None:
+        with self.assertRaises(ValueError):
+            render_lod_viewer_html({"kind": "single", "levels": []})
 
 
 if __name__ == "__main__":

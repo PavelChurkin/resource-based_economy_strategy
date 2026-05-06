@@ -22,6 +22,7 @@ from .hex_sphere import (
     HexSphereChunk,
     HexSphereMesh,
     Isea3hGridSpec,
+    build_hex_sphere_lod_payload,
     build_hex_sphere_mesh,
 )
 from .tech_tree import Technology, TechTree, load_tech_tree, parse_tech_tree
@@ -41,6 +42,7 @@ __all__ = [
     "HexSphereChunk",
     "HexSphereMesh",
     "Isea3hGridSpec",
+    "build_hex_sphere_lod_payload",
     "build_hex_sphere_mesh",
     "Technology",
     "TechTree",

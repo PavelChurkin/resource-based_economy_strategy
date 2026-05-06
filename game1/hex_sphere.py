@@ -314,6 +314,51 @@ def render_frequency_for_resolution(resolution: int) -> int:
     return 3 ** (resolution // 2)
 
 
+def build_hex_sphere_lod_payload(
+    *,
+    grid_resolutions: Iterable[int] = (2, 4, 6),
+    planet_radius_m: float = DEFAULT_TENTH_EARTH_RADIUS_M,
+    zoom_thresholds: Iterable[float] | None = None,
+) -> dict[str, object]:
+    """Build a multi-resolution payload for zoom-driven LOD rendering.
+
+    The viewer holds several meshes at once and switches between them as the
+    camera zooms. Each level uses an even ISEA3H resolution with an exact dual
+    cell count. The first level is the lowest density (drawn far from the
+    planet), the last is the highest density (drawn when zoomed in).
+    """
+
+    levels = sorted({int(resolution) for resolution in grid_resolutions})
+    if not levels:
+        raise ValueError("grid_resolutions must contain at least one resolution")
+
+    meshes = [
+        build_hex_sphere_mesh(
+            grid_resolution=resolution,
+            planet_radius_m=planet_radius_m,
+        )
+        for resolution in levels
+    ]
+
+    if zoom_thresholds is None:
+        thresholds: tuple[float, ...] = tuple(
+            round(1.0 + index * 0.6, 6) for index in range(len(levels) - 1)
+        )
+    else:
+        thresholds = tuple(float(value) for value in zoom_thresholds)
+        if len(thresholds) != len(levels) - 1:
+            raise ValueError(
+                "zoom_thresholds must have one fewer entry than grid_resolutions"
+            )
+
+    return {
+        "kind": "lod",
+        "planetRadiusM": planet_radius_m,
+        "zoomThresholds": list(thresholds),
+        "levels": [mesh.to_render_payload() for mesh in meshes],
+    }
+
+
 def build_hex_sphere_mesh(
     *,
     frequency: int | None = None,

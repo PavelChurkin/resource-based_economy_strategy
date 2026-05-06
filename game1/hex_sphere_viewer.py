@@ -5,23 +5,59 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .hex_sphere import HexSphereMesh
+from .hex_sphere import HexSphereMesh, build_hex_sphere_lod_payload
 
 
 def render_viewer_html(mesh: HexSphereMesh) -> str:
-    payload = json.dumps(
-        mesh.to_render_payload(),
-        ensure_ascii=True,
-        separators=(",", ":"),
-    )
-    return _VIEWER_TEMPLATE.replace("__MESH_PAYLOAD__", payload)
+    """Render a viewer HTML for a single-resolution mesh (legacy entrypoint)."""
+
+    payload: dict[str, object] = {
+        "kind": "lod",
+        "planetRadiusM": mesh.spec.planet_radius_m,
+        "zoomThresholds": [],
+        "levels": [mesh.to_render_payload()],
+    }
+    return _render_with_payload(payload)
 
 
-def write_viewer_html(path: str | Path, mesh: HexSphereMesh) -> Path:
+def render_lod_viewer_html(payload: dict[str, object]) -> str:
+    """Render a viewer HTML for a multi-resolution LOD payload."""
+
+    if payload.get("kind") != "lod":
+        raise ValueError("payload must be produced by build_hex_sphere_lod_payload")
+    return _render_with_payload(payload)
+
+
+def write_viewer_html(
+    path: str | Path,
+    mesh_or_payload: HexSphereMesh | dict[str, object],
+) -> Path:
+    if isinstance(mesh_or_payload, HexSphereMesh):
+        html = render_viewer_html(mesh_or_payload)
+    else:
+        html = render_lod_viewer_html(mesh_or_payload)
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(render_viewer_html(mesh), encoding="utf-8")
+    output_path.write_text(html, encoding="utf-8")
     return output_path
+
+
+def write_lod_viewer_html(
+    path: str | Path,
+    *,
+    grid_resolutions: tuple[int, ...] = (2, 4, 6),
+    planet_radius_m: float | None = None,
+) -> Path:
+    kwargs: dict[str, object] = {"grid_resolutions": grid_resolutions}
+    if planet_radius_m is not None:
+        kwargs["planet_radius_m"] = planet_radius_m
+    payload = build_hex_sphere_lod_payload(**kwargs)
+    return write_viewer_html(path, payload)
+
+
+def _render_with_payload(payload: dict[str, object]) -> str:
+    serialised = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+    return _VIEWER_TEMPLATE.replace("__MESH_PAYLOAD__", serialised)
 
 
 _VIEWER_TEMPLATE = """<!doctype html>
@@ -63,6 +99,7 @@ _VIEWER_TEMPLATE = """<!doctype html>
       height: 100vh;
       cursor: grab;
       touch-action: none;
+      outline: none;
     }
 
     canvas:active {
@@ -91,6 +128,25 @@ _VIEWER_TEMPLATE = """<!doctype html>
       line-height: 1.35;
       letter-spacing: 0;
       white-space: nowrap;
+    }
+
+    .help {
+      white-space: normal;
+      max-width: 260px;
+      font-size: 11px;
+      color: #46524b;
+    }
+
+    .help kbd {
+      display: inline-block;
+      padding: 1px 5px;
+      border: 1px solid rgba(31, 39, 34, 0.20);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.92);
+      font: 600 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #1f2722;
+      margin: 0 1px;
     }
 
     .tools {
@@ -131,6 +187,10 @@ _VIEWER_TEMPLATE = """<!doctype html>
         text-overflow: ellipsis;
       }
 
+      .help {
+        white-space: normal;
+      }
+
       .tools {
         top: 10px;
         right: 10px;
@@ -140,10 +200,16 @@ _VIEWER_TEMPLATE = """<!doctype html>
   </style>
 </head>
 <body>
-  <canvas id="planet"></canvas>
+  <canvas id="planet" tabindex="0"></canvas>
   <div class="hud" aria-live="polite">
     <div class="panel" id="stats"></div>
     <div class="panel" id="selection"></div>
+    <div class="panel help">
+      <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> rotate &middot;
+      <kbd>Q</kbd><kbd>E</kbd> roll &middot;
+      <kbd>+</kbd><kbd>-</kbd> zoom &middot;
+      <kbd>R</kbd> reset
+    </div>
   </div>
   <div class="tools">
     <button id="zoomIn" title="Zoom in" aria-label="Zoom in">+</button>
@@ -157,7 +223,12 @@ _VIEWER_TEMPLATE = """<!doctype html>
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     const stats = document.getElementById("stats");
     const selection = document.getElementById("selection");
-    const cells = payload.chunks.flatMap((chunk) => chunk.cells);
+
+    const levels = (payload.levels || [payload]).map((level) => ({
+      grid: level.grid,
+      cells: level.chunks.flatMap((chunk) => chunk.cells)
+    }));
+    const zoomThresholds = payload.zoomThresholds || [];
     const colors = {
       polar: "#e9f3f5",
       tundra: "#a7b8a0",
@@ -170,19 +241,55 @@ _VIEWER_TEMPLATE = """<!doctype html>
     };
     const light = normalize([-0.45, -0.52, 0.72]);
 
+    const ZOOM_MIN = 0.55;
+    const ZOOM_MAX = 6.0;
+    const KEY_ROTATE_STEP = 0.06;
+    const KEY_ZOOM_STEP = 1.10;
+
     let width = 0;
     let height = 0;
     let rotationX = -0.28;
     let rotationY = 0.54;
+    let rotationZ = 0.0;
     let zoom = 1.0;
     let dragging = false;
     let pointerX = 0;
     let pointerY = 0;
     let screenCells = [];
-    let selectedCell = cells[0];
+    let activeLevel = pickLevel(zoom);
+    let selectedCell = activeLevel.cells[0];
+    const pressedKeys = new Set();
+    let keyAnimationHandle = null;
+    let lastKeyTimestamp = 0;
 
-    stats.textContent = `ISEA3H r${payload.grid.resolution} | ${payload.grid.renderCellCount} cells | ${payload.chunks.length} chunks`;
+    updateStats();
     updateSelection(selectedCell);
+
+    function pickLevel(currentZoom) {
+      let index = 0;
+      for (let i = 0; i < zoomThresholds.length; i += 1) {
+        if (currentZoom >= zoomThresholds[i]) {
+          index = i + 1;
+        }
+      }
+      return levels[Math.min(index, levels.length - 1)];
+    }
+
+    function refreshActiveLevel() {
+      const next = pickLevel(zoom);
+      if (next !== activeLevel) {
+        activeLevel = next;
+        updateStats();
+      }
+    }
+
+    function updateStats() {
+      const grid = activeLevel.grid;
+      const lodIndex = levels.indexOf(activeLevel) + 1;
+      stats.textContent =
+        `LOD ${lodIndex}/${levels.length} | ISEA3H r${grid.resolution} | ` +
+        `${grid.renderCellCount} cells | zoom ${zoom.toFixed(2)}x`;
+    }
 
     function resize() {
       const scale = window.devicePixelRatio || 1;
@@ -203,6 +310,7 @@ _VIEWER_TEMPLATE = """<!doctype html>
       const cy = height * 0.54;
       screenCells = [];
 
+      const cells = activeLevel.cells;
       const drawable = cells
         .map((cell) => {
           const center = rotate(cell.center);
@@ -246,8 +354,8 @@ _VIEWER_TEMPLATE = """<!doctype html>
       ctx.closePath();
       ctx.fillStyle = fill;
       ctx.fill();
-      ctx.strokeStyle = `rgba(27, 38, 32, ${0.12 + Math.max(0, z) * 0.18})`;
-      ctx.lineWidth = 0.7;
+      ctx.strokeStyle = `rgba(27, 38, 32, ${0.10 + Math.max(0, z) * 0.16})`;
+      ctx.lineWidth = 0.6;
       ctx.stroke();
     }
 
@@ -256,11 +364,15 @@ _VIEWER_TEMPLATE = """<!doctype html>
       const cx = Math.cos(rotationX);
       const sy = Math.sin(rotationY);
       const cy = Math.cos(rotationY);
+      const sz = Math.sin(rotationZ);
+      const cz = Math.cos(rotationZ);
       const y1 = v[1] * cx - v[2] * sx;
       const z1 = v[1] * sx + v[2] * cx;
       const x2 = v[0] * cy + z1 * sy;
       const z2 = -v[0] * sy + z1 * cy;
-      return [x2, y1, z2];
+      const x3 = x2 * cz - y1 * sz;
+      const y3 = x2 * sz + y1 * cz;
+      return [x3, y3, z2];
     }
 
     function project(v, cx, cy, radius) {
@@ -320,11 +432,91 @@ _VIEWER_TEMPLATE = """<!doctype html>
       selection.textContent = `${cell.token} | ${cell.biome} | ${Math.round(cell.elevationM)} m`;
     }
 
+    function clampPitch(value) {
+      return Math.max(-1.35, Math.min(1.35, value));
+    }
+
+    function applyZoom(factor) {
+      zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom * factor));
+      refreshActiveLevel();
+      updateStats();
+      draw();
+    }
+
+    function resetCamera() {
+      rotationX = -0.28;
+      rotationY = 0.54;
+      rotationZ = 0.0;
+      zoom = 1.0;
+      refreshActiveLevel();
+      updateStats();
+      draw();
+    }
+
+    function isTextEntryTarget(target) {
+      if (!target) return false;
+      const tag = target.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable;
+    }
+
+    function processKeys(timestamp) {
+      const last = lastKeyTimestamp || timestamp;
+      const elapsed = Math.min(64, timestamp - last);
+      lastKeyTimestamp = timestamp;
+      const stepScale = elapsed / 16;
+      const rotationStep = KEY_ROTATE_STEP * stepScale;
+      let changed = false;
+
+      if (pressedKeys.has("w")) {
+        rotationX = clampPitch(rotationX - rotationStep);
+        changed = true;
+      }
+      if (pressedKeys.has("s")) {
+        rotationX = clampPitch(rotationX + rotationStep);
+        changed = true;
+      }
+      if (pressedKeys.has("a")) {
+        rotationY -= rotationStep;
+        changed = true;
+      }
+      if (pressedKeys.has("d")) {
+        rotationY += rotationStep;
+        changed = true;
+      }
+      if (pressedKeys.has("q")) {
+        rotationZ -= rotationStep;
+        changed = true;
+      }
+      if (pressedKeys.has("e")) {
+        rotationZ += rotationStep;
+        changed = true;
+      }
+
+      if (changed) {
+        draw();
+      }
+
+      if (pressedKeys.size === 0) {
+        keyAnimationHandle = null;
+        lastKeyTimestamp = 0;
+      } else {
+        keyAnimationHandle = window.requestAnimationFrame(processKeys);
+      }
+    }
+
+    function ensureKeyAnimation() {
+      if (keyAnimationHandle === null && pressedKeys.size > 0) {
+        lastKeyTimestamp = 0;
+        keyAnimationHandle = window.requestAnimationFrame(processKeys);
+      }
+    }
+
     canvas.addEventListener("pointerdown", (event) => {
       dragging = true;
       pointerX = event.clientX;
       pointerY = event.clientY;
       canvas.setPointerCapture(event.pointerId);
+      canvas.focus({ preventScroll: true });
     });
 
     canvas.addEventListener("pointermove", (event) => {
@@ -334,7 +526,7 @@ _VIEWER_TEMPLATE = """<!doctype html>
       pointerX = event.clientX;
       pointerY = event.clientY;
       rotationY += dx * 0.008;
-      rotationX = Math.max(-1.35, Math.min(1.35, rotationX + dy * 0.008));
+      rotationX = clampPitch(rotationX + dy * 0.008);
       draw();
     });
 
@@ -345,28 +537,66 @@ _VIEWER_TEMPLATE = """<!doctype html>
 
     canvas.addEventListener("wheel", (event) => {
       event.preventDefault();
-      zoom = Math.max(0.55, Math.min(2.4, zoom * (event.deltaY > 0 ? 0.92 : 1.08)));
-      draw();
+      applyZoom(event.deltaY > 0 ? 0.92 : 1.08);
     }, { passive: false });
 
     document.getElementById("zoomIn").addEventListener("click", () => {
-      zoom = Math.min(2.4, zoom * 1.12);
-      draw();
+      applyZoom(KEY_ZOOM_STEP);
+      canvas.focus({ preventScroll: true });
     });
 
     document.getElementById("zoomOut").addEventListener("click", () => {
-      zoom = Math.max(0.55, zoom / 1.12);
-      draw();
+      applyZoom(1 / KEY_ZOOM_STEP);
+      canvas.focus({ preventScroll: true });
     });
 
     document.getElementById("reset").addEventListener("click", () => {
-      rotationX = -0.28;
-      rotationY = 0.54;
-      zoom = 1.0;
-      draw();
+      resetCamera();
+      canvas.focus({ preventScroll: true });
+    });
+
+    window.addEventListener("keydown", (event) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (isTextEntryTarget(event.target)) return;
+      const key = event.key.toLowerCase();
+      if (["w", "a", "s", "d", "q", "e"].includes(key)) {
+        if (!pressedKeys.has(key)) {
+          pressedKeys.add(key);
+          ensureKeyAnimation();
+        }
+        event.preventDefault();
+        return;
+      }
+      if (key === "r") {
+        resetCamera();
+        event.preventDefault();
+        return;
+      }
+      if (key === "+" || key === "=") {
+        applyZoom(KEY_ZOOM_STEP);
+        event.preventDefault();
+        return;
+      }
+      if (key === "-" || key === "_") {
+        applyZoom(1 / KEY_ZOOM_STEP);
+        event.preventDefault();
+        return;
+      }
+    });
+
+    window.addEventListener("keyup", (event) => {
+      const key = event.key.toLowerCase();
+      if (pressedKeys.delete(key)) {
+        event.preventDefault();
+      }
+    });
+
+    window.addEventListener("blur", () => {
+      pressedKeys.clear();
     });
 
     window.addEventListener("resize", resize);
+    canvas.focus({ preventScroll: true });
     resize();
   </script>
 </body>
