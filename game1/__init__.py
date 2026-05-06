@@ -25,8 +25,15 @@ from .hex_sphere import (
     build_hex_sphere_lod_payload,
     build_hex_sphere_mesh,
 )
+from .sphere_points import (
+    SpherePointLevel,
+    SpherePointPayload,
+    build_sphere_point_level,
+    build_sphere_point_payload,
+)
 from .tech_tree import Technology, TechTree, load_tech_tree, parse_tech_tree
 from .time_control import TimeController, TimeMode
+from .webgl_planet_viewer import render_webgl_viewer_html, write_webgl_viewer_html
 
 __all__ = [
     "Planet",
@@ -44,6 +51,12 @@ __all__ = [
     "Isea3hGridSpec",
     "build_hex_sphere_lod_payload",
     "build_hex_sphere_mesh",
+    "SpherePointLevel",
+    "SpherePointPayload",
+    "build_sphere_point_level",
+    "build_sphere_point_payload",
+    "render_webgl_viewer_html",
+    "write_webgl_viewer_html",
     "Technology",
     "TechTree",
     "load_tech_tree",
