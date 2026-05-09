@@ -16,6 +16,11 @@ exposing two operations:
 
 The controller uses an injectable ``clock`` callable so tests can step time
 without sleeping. A real client passes ``time.monotonic``.
+
+Version 0.0.5 keeps those defaults for compatibility and adds
+``TimeController.weekly(...)``: normal mode advances one game week
+(seven daily simulation ticks) every five wall-clock seconds, matching the
+new game-loop requirement while still allowing planning during pause.
 """
 
 from __future__ import annotations
@@ -51,12 +56,31 @@ class TimeController:
     clock: Callable[[], float]
     seconds_per_day_normal: float = 10.0
     seconds_per_day_fast: float = 1.0
+    game_days_per_tick: int = 1
     mode: TimeMode = TimeMode.PAUSED
     day: int = 0
     _last_tick_time: float = field(default=0.0, init=False)
 
     def __post_init__(self) -> None:
+        if self.game_days_per_tick < 1:
+            raise ValueError("game_days_per_tick must be positive")
         self._last_tick_time = self.clock()
+
+    @classmethod
+    def weekly(
+        cls,
+        simulation: TickableSimulation,
+        clock: Callable[[], float],
+    ) -> TimeController:
+        """Build the v0.0.5 clock: one week every five seconds."""
+
+        return cls(
+            simulation=simulation,
+            clock=clock,
+            seconds_per_day_normal=5.0,
+            seconds_per_day_fast=1.0,
+            game_days_per_tick=7,
+        )
 
     # ------------------------------------------------------------------
     # Mode control
@@ -96,11 +120,12 @@ class TimeController:
         seconds_per_day = self._seconds_per_day()
         if elapsed < seconds_per_day:
             return 0
-        days_to_run = int(elapsed // seconds_per_day)
+        ticks_to_run = int(elapsed // seconds_per_day)
+        days_to_run = ticks_to_run * self.game_days_per_tick
         for _ in range(days_to_run):
             self.simulation.tick()
             self.day += 1
-        self._last_tick_time += days_to_run * seconds_per_day
+        self._last_tick_time += ticks_to_run * seconds_per_day
         return days_to_run
 
     # ------------------------------------------------------------------

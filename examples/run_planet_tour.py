@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def main() -> None:
     from game1 import Climate, build_demo_planet
-    from game1.planet import iter_tiles_by_biome
+    from game1.planet import BIOMES, iter_tiles_by_biome
 
     planet = build_demo_planet()
     climate = Climate()
@@ -31,20 +31,23 @@ def main() -> None:
 
     print()
     print("biome counts:")
-    for biome in (
-        "polar",
-        "tundra",
-        "boreal",
-        "temperate",
-        "steppe",
-        "tropical",
-    ):
+    for biome in BIOMES:
         tiles = list(iter_tiles_by_biome(planet, biome))
         print(f"  {biome:>10}: {len(tiles)} tiles")
 
     print()
-    print("seasonal sample for first temperate tile every 30 days:")
-    sample_tile = next(iter_tiles_by_biome(planet, "temperate"))
+    print("seasonal sample for first land tile every 30 days:")
+    land_tiles = [
+        tile for tile in planet if tile.terrain.biome not in {"ocean", "lake"}
+    ]
+    sample_tile = next(
+        (
+            tile
+            for tile in land_tiles
+            if tile.terrain.biome not in {"polar"}
+        ),
+        land_tiles[0],
+    )
     for day in range(0, 360, 30):
         weather = climate.weather_for(
             day=day,

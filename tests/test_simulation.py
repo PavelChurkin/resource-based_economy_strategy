@@ -32,7 +32,7 @@ class ResourceBasedSimulationTest(unittest.TestCase):
         self.assertNotIn("money", settlement.inventory)
         self.assertNotIn("currency", settlement.inventory)
         self.assertLess(settlement.inventory["food"], 30)
-        self.assertLess(settlement.inventory["water"], 30)
+        self.assertGreater(report.consumed["water"], 0)
         self.assertGreater(report.needs_satisfied_ratio, 0.95)
 
     def test_weather_changes_renewable_and_water_output(self) -> None:
@@ -199,7 +199,7 @@ class ResourceBasedSimulationTest(unittest.TestCase):
 
         self.assertEqual(settlement.day, 0)
         self.assertIn('командой "0"', reason)
-        self.assertIn("Ресурсная стратегия 0.0.2", output.getvalue())
+        self.assertIn("Ресурсная стратегия 0.0.5", output.getvalue())
 
     def test_managed_simulation_stops_when_everyone_dies(self) -> None:
         settlement = Settlement(

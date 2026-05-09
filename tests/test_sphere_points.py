@@ -2,7 +2,6 @@ import math
 import unittest
 
 from game1.sphere_points import (
-    BIOME_INDEX,
     BIOME_PALETTE,
     SpherePointPayload,
     build_sphere_point_level,
