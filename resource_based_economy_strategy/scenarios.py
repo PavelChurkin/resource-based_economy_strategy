@@ -50,22 +50,21 @@ def create_player_settlement(
     latitude: float = 45.0,
     seed: int | None = None,
 ) -> Settlement:
-    """Create the v0.0.5 multiplayer-ready starting settlement."""
+    """Create the v0.0.6 multiplayer-ready starting settlement."""
 
     people = 10
-    daily_food = 1.8
-    daily_water = 3.0
+    daily_food = 0.002
+    daily_water = 0.003
     inventory = {
         "food": people * daily_food * DAYS_PER_YEAR,
         "water": people * daily_water * DAYS_PER_YEAR,
         "roundwood": 80.0,
-        "wood": 40.0,
         "stone": 80.0,
         "sand": 30.0,
         "clay": 40.0,
         "raw_metal": 12.0,
         "tools": 2.0,
-        "heat": 120.0,
+        "coal": 8.0,
     }
     if seed is not None:
         planet = build_demo_planet(seed=seed)
@@ -80,8 +79,7 @@ def create_player_settlement(
         people=people,
         inventory=inventory,
         buildings=[
-            Building("warehouse", owner=nickname),
-            Building("housing2", owner=nickname),
+            Building("city_center", point_id=0, owner=nickname),
         ],
         weather=Weather.for_planet_day(0, latitude=latitude),
         latitude=latitude,

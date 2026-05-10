@@ -20,7 +20,7 @@ class ResourceBasedSimulationTest(unittest.TestCase):
             initial_resources={
                 "food": 30,
                 "water": 30,
-                "wood": 10,
+                "roundwood": 10,
                 "stone": 5,
             },
             seed=1,
@@ -31,7 +31,7 @@ class ResourceBasedSimulationTest(unittest.TestCase):
         self.assertEqual(settlement.day, 1)
         self.assertNotIn("money", settlement.inventory)
         self.assertNotIn("currency", settlement.inventory)
-        self.assertLess(settlement.inventory["food"], 30)
+        self.assertGreater(report.consumed["food"], 0)
         self.assertGreater(report.consumed["water"], 0)
         self.assertGreater(report.needs_satisfied_ratio, 0.95)
 
@@ -96,7 +96,12 @@ class ResourceBasedSimulationTest(unittest.TestCase):
     def test_wheel_unlock_increases_daily_logistics_capacity(self) -> None:
         settlement = create_empty_map_settlement(
             people=2,
-            initial_resources={"food": 100, "water": 100, "wood": 20, "stone": 20},
+            initial_resources={
+                "food": 100,
+                "water": 100,
+                "roundwood": 20,
+                "stone": 20,
+            },
             seed=1,
         )
 
@@ -139,7 +144,7 @@ class ResourceBasedSimulationTest(unittest.TestCase):
             name="sawmill",
             recipes=[
                 Recipe(
-                    inputs={"wood": 2},
+                    inputs={"roundwood": 2},
                     outputs={"plank": 3, "sawdust": 1},
                     labor_days=1,
                 )
@@ -147,7 +152,7 @@ class ResourceBasedSimulationTest(unittest.TestCase):
         )
         settlement = Settlement(
             people=1,
-            inventory={"food": 50, "water": 50, "wood": 6},
+            inventory={"food": 50, "water": 50, "roundwood": 6},
             buildings=[Building("sawmill")],
             config=SimulationConfig(building_definitions={"sawmill": sawmill}),
             weather=Weather.stable(),
@@ -158,7 +163,7 @@ class ResourceBasedSimulationTest(unittest.TestCase):
         self.assertNotIn("money", settlement.inventory)
         self.assertEqual(settlement.inventory["plank"], 3)
         self.assertEqual(settlement.inventory["sawdust"], 1)
-        self.assertLess(settlement.inventory["wood"], 6)
+        self.assertLess(settlement.inventory["roundwood"], 6)
 
     def test_seed_adds_repeatable_world_resources(self) -> None:
         first = create_empty_map_settlement(
@@ -199,7 +204,7 @@ class ResourceBasedSimulationTest(unittest.TestCase):
 
         self.assertEqual(settlement.day, 0)
         self.assertIn('командой "0"', reason)
-        self.assertIn("Ресурсная стратегия 0.0.5", output.getvalue())
+        self.assertIn("Ресурсная стратегия 0.0.6", output.getvalue())
 
     def test_managed_simulation_stops_when_everyone_dies(self) -> None:
         settlement = Settlement(

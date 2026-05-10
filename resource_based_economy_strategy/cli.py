@@ -5,17 +5,19 @@ from collections.abc import Callable
 from typing import TextIO
 
 from resource_based_economy_strategy.scenarios import create_empty_map_settlement
-from resource_based_economy_strategy.simulation import DayReport, Settlement
+from resource_based_economy_strategy.simulation import (
+    ENERGY_RESOURCE,
+    DayReport,
+    Settlement,
+)
 
 
 RESOURCE_NAMES = {
     "electricity": "электричество",
+    ENERGY_RESOURCE: "энергия, МВт·сут",
     "food": "еда",
-    "grain": "зерно",
-    "heat": "тепло",
     "herbs": "травы",
     "housing": "жильё",
-    "iron_ore": "железная руда",
     "raw_metal": "сырая руда",
     "sand": "песок",
     "clay": "глина",
@@ -29,7 +31,6 @@ RESOURCE_NAMES = {
     "sawdust": "опилки",
     "stone": "камень",
     "water": "вода",
-    "wood": "древесина",
 }
 
 
@@ -59,9 +60,9 @@ def build_starting_settlement(
         latitude=latitude,
         seed=seed,
         initial_resources={
-            "food": people * 15.0,
-            "water": people * 24.0,
-            "wood": 30.0,
+            "food": people * 0.002 * 30,
+            "water": people * 0.003 * 30,
+            "roundwood": 30.0,
             "stone": 20.0,
         },
     )
@@ -83,7 +84,7 @@ def run_managed_simulation(
         output = sys.stdout
 
     reason = "Заданное количество дней завершено."
-    print("Ресурсная стратегия 0.0.5", file=output)
+    print("Ресурсная стратегия 0.0.6", file=output)
     print(
         "Цель: сохранить жизнь поселения без денег, только через ресурсы.",
         file=output,

@@ -212,11 +212,11 @@ def build_demo_planet(
             resources: dict[str, float] = {}
             biome = sample.biome
             if biome in {"boreal", "temperate", "tropical"}:
-                resources["wood"] = round(next_unit() * 100.0, 1)
+                resources["roundwood"] = round(next_unit() * 100.0, 1)
             if biome in {"steppe", "temperate"}:
-                resources["grain"] = round(next_unit() * 80.0, 1)
+                resources["food"] = round(next_unit() * 0.8, 3)
             if biome in {"tundra", "polar", "boreal", "mountain"}:
-                resources["iron_ore"] = round(next_unit() * 50.0, 1)
+                resources["raw_metal"] = round(next_unit() * 50.0, 1)
             if biome in {"desert", "tropical", "mountain", "steppe"}:
                 resources["stone"] = round(next_unit() * 90.0, 1)
             if biome in {"temperate", "steppe", "lake"}:
