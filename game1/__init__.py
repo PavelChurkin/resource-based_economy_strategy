@@ -26,10 +26,17 @@ from .hex_sphere import (
     build_hex_sphere_mesh,
 )
 from .sphere_points import (
+    FEATURE_ISLAND,
+    FEATURE_LAKE,
+    FEATURE_MOUNTAIN,
+    FEATURE_RIVER,
     SpherePointLevel,
     SpherePointPayload,
+    TerrainSample,
     build_sphere_point_level,
     build_sphere_point_payload,
+    point_from_lat_lon,
+    sample_point_terrain,
 )
 from .tech_tree import Technology, TechTree, load_tech_tree, parse_tech_tree
 from .time_control import TimeController, TimeMode
@@ -53,8 +60,15 @@ __all__ = [
     "build_hex_sphere_mesh",
     "SpherePointLevel",
     "SpherePointPayload",
+    "TerrainSample",
+    "FEATURE_RIVER",
+    "FEATURE_LAKE",
+    "FEATURE_MOUNTAIN",
+    "FEATURE_ISLAND",
     "build_sphere_point_level",
     "build_sphere_point_payload",
+    "point_from_lat_lon",
+    "sample_point_terrain",
     "render_webgl_viewer_html",
     "write_webgl_viewer_html",
     "Technology",

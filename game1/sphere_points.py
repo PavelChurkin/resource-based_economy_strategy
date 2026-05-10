@@ -22,7 +22,7 @@ id without reshaping the data.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import asin, atan2, cos, degrees, floor, pi, sin, sqrt
+from math import asin, atan2, cos, degrees, floor, pi, radians, sin, sqrt
 from typing import Iterable, Sequence
 
 from .hex_sphere import DEFAULT_TENTH_EARTH_RADIUS_M
@@ -33,6 +33,7 @@ Vec3 = tuple[float, float, float]
 
 BIOME_PALETTE: tuple[tuple[str, str], ...] = (
     ("ocean", "#2f6f9a"),
+    ("lake", "#2f8fb7"),
     ("polar", "#e6f1f3"),
     ("tundra", "#a7b8a0"),
     ("boreal", "#46734f"),
@@ -40,8 +41,42 @@ BIOME_PALETTE: tuple[tuple[str, str], ...] = (
     ("steppe", "#c2b15c"),
     ("desert", "#d29a4d"),
     ("tropical", "#27905b"),
+    ("mountain", "#8f958d"),
 )
 BIOME_INDEX = {name: index for index, (name, _color) in enumerate(BIOME_PALETTE)}
+
+FEATURE_RIVER = 1
+FEATURE_LAKE = 2
+FEATURE_MOUNTAIN = 4
+FEATURE_ISLAND = 8
+
+
+@dataclass(frozen=True)
+class TerrainSample:
+    """Deterministic terrain sample for one point on the unit sphere."""
+
+    biome: str
+    elevation_m: int
+    features: int = 0
+    river_drop_m: float = 0.0
+    continent_score: float = 0.0
+    moisture: float = 0.0
+
+    @property
+    def has_river(self) -> bool:
+        return bool(self.features & FEATURE_RIVER)
+
+    @property
+    def has_lake(self) -> bool:
+        return bool(self.features & FEATURE_LAKE)
+
+    @property
+    def has_mountain(self) -> bool:
+        return bool(self.features & FEATURE_MOUNTAIN)
+
+    @property
+    def is_island(self) -> bool:
+        return bool(self.features & FEATURE_ISLAND)
 
 
 @dataclass(frozen=True)
@@ -57,6 +92,7 @@ class SpherePointLevel:
     positions: tuple[Vec3, ...]
     biomes: tuple[int, ...]
     elevations_m: tuple[int, ...]
+    features: tuple[int, ...]
     seed: int
 
     def to_render_dict(self) -> dict[str, object]:
@@ -71,6 +107,7 @@ class SpherePointLevel:
             "positions": flat_positions,
             "biomes": list(self.biomes),
             "elevations": list(self.elevations_m),
+            "features": list(self.features),
         }
 
 
@@ -116,6 +153,7 @@ def build_sphere_point_level(
     positions: list[Vec3] = []
     biomes: list[int] = []
     elevations: list[int] = []
+    features: list[int] = []
 
     for index in range(count):
         # Even spacing of z in [-1, 1].
@@ -125,17 +163,18 @@ def build_sphere_point_level(
         x = cos(theta) * radius_xy
         y = sin(theta) * radius_xy
 
-        latitude = degrees(asin(max(-1.0, min(1.0, z))))
-        biome, elevation_m = _biome_and_elevation((x, y, z), latitude, seed + index)
+        terrain = sample_point_terrain((x, y, z), seed=seed)
         positions.append((x, y, z))
-        biomes.append(BIOME_INDEX[biome])
-        elevations.append(elevation_m)
+        biomes.append(BIOME_INDEX[terrain.biome])
+        elevations.append(terrain.elevation_m)
+        features.append(terrain.features)
 
     return SpherePointLevel(
         count=count,
         positions=tuple(positions),
         biomes=tuple(biomes),
         elevations_m=tuple(elevations),
+        features=tuple(features),
         seed=seed,
     )
 
@@ -191,18 +230,122 @@ def build_sphere_point_payload(
     )
 
 
-def _biome_and_elevation(
-    point: Vec3, latitude: float, salt: int
-) -> tuple[str, int]:
-    base_noise = _noise(point, salt)
-    if base_noise < 0.42:
-        elevation = int(round(-200 + base_noise * 400))
-        return "ocean", elevation
+def point_from_lat_lon(latitude: float, longitude: float) -> Vec3:
+    """Convert latitude/longitude degrees into a unit-sphere point."""
 
-    biome = _biome_for_latitude(latitude)
-    elevation_noise = _noise((point[1], point[2], point[0]), salt + 17)
-    elevation = int(round(elevation_noise * 2200.0))
-    return biome, elevation
+    lat = radians(latitude)
+    lon = radians(longitude)
+    cos_lat = cos(lat)
+    return (cos_lat * cos(lon), cos_lat * sin(lon), sin(lat))
+
+
+def sample_point_terrain(point: Vec3, *, seed: int = 1) -> TerrainSample:
+    """Sample coherent terrain for a unit-sphere point.
+
+    The generator uses only continuous spherical noise, not per-point hashes,
+    so nearby positions tend to keep the same ocean/continent/biome identity.
+    Rivers and lakes are sparse feature bits layered on top of the biome.
+    """
+
+    latitude, _longitude = lat_lon_for_point(point)
+    abs_lat = abs(latitude)
+    continent = _smooth_noise(point, seed + 101, base_frequency=1.05, octaves=4)
+    island_score = _smooth_noise(point, seed + 151, base_frequency=6.0, octaves=3)
+    moisture = 0.5 + 0.5 * _smooth_noise(
+        (point[2], point[0], point[1]),
+        seed + 211,
+        base_frequency=1.8,
+        octaves=4,
+    )
+    moisture = max(0.0, min(1.0, moisture))
+
+    sea_level = -0.10
+    is_ocean = continent < sea_level
+    is_rare_island = (
+        is_ocean
+        and continent > sea_level - 0.28
+        and island_score > 0.42
+        and abs_lat < 72.0
+    )
+    if is_ocean and not is_rare_island:
+        ocean_depth = int(round(-120 - (sea_level - continent) * 2400))
+        return TerrainSample(
+            biome="ocean",
+            elevation_m=ocean_depth,
+            continent_score=continent,
+            moisture=moisture,
+        )
+
+    mountain_score = 1.0 - abs(
+        _smooth_noise(
+            (point[1], point[2], point[0]),
+            seed + 307,
+            base_frequency=3.2,
+            octaves=4,
+        )
+    )
+    basin_score = abs(
+        _smooth_noise(
+            (point[0] + 0.13, point[1] - 0.07, point[2] + 0.05),
+            seed + 331,
+            base_frequency=7.0,
+            octaves=2,
+        )
+    )
+    river_score = abs(
+        _smooth_noise(
+            (point[2] - 0.05, point[0] + 0.03, point[1]),
+            seed + 401,
+            base_frequency=8.0,
+            octaves=2,
+        )
+    )
+
+    land_height = max(0.0, continent - sea_level)
+    elevation = int(round(35 + land_height * 1700 + (mountain_score**4) * 3100))
+    has_mountain = mountain_score > 0.94 and elevation > 1250 and abs_lat < 82.0
+    has_lake = (
+        not has_mountain
+        and moisture > 0.55
+        and basin_score < 0.13
+        and elevation < 1100
+        and abs_lat < 70.0
+    )
+    has_river = (
+        not has_lake
+        and river_score < 0.055
+        and moisture > 0.34
+        and elevation > 80
+        and abs_lat < 78.0
+    )
+
+    features = 0
+    if is_rare_island:
+        features |= FEATURE_ISLAND
+    if has_mountain:
+        features |= FEATURE_MOUNTAIN
+    if has_lake:
+        features |= FEATURE_LAKE
+    if has_river:
+        features |= FEATURE_RIVER
+
+    if has_lake:
+        biome = "lake"
+        elevation = max(0, min(elevation, 220))
+    elif has_mountain:
+        biome = "mountain"
+    else:
+        biome = _land_biome(latitude, moisture)
+
+    river_drop = round(8.0 + mountain_score * 70.0, 1) if has_river else 0.0
+    return TerrainSample(
+        biome=biome,
+        elevation_m=elevation,
+        features=features,
+        river_drop_m=river_drop,
+        continent_score=continent,
+        moisture=moisture,
+    )
 
 
 def _biome_for_latitude(latitude: float) -> str:
@@ -218,6 +361,64 @@ def _biome_for_latitude(latitude: float) -> str:
     if abs_lat >= 15:
         return "steppe"
     return "tropical"
+
+
+def _land_biome(latitude: float, moisture: float) -> str:
+    abs_lat = abs(latitude)
+    if abs_lat >= 75:
+        return "polar"
+    if abs_lat >= 62:
+        return "tundra"
+    if abs_lat >= 48:
+        return "boreal" if moisture >= 0.35 else "tundra"
+    if abs_lat >= 32:
+        if moisture < 0.22:
+            return "desert"
+        if moisture < 0.45:
+            return "steppe"
+        return "temperate"
+    if abs_lat >= 16:
+        if moisture < 0.25:
+            return "desert"
+        if moisture < 0.50:
+            return "steppe"
+        return "tropical"
+    return "tropical" if moisture >= 0.35 else "desert"
+
+
+def _smooth_noise(
+    point: Vec3,
+    salt: int,
+    *,
+    base_frequency: float,
+    octaves: int,
+) -> float:
+    value = 0.0
+    amplitude = 1.0
+    total_amplitude = 0.0
+    frequency = base_frequency
+    for octave in range(octaves):
+        value += amplitude * _wave_noise(point, salt + octave * 37, frequency)
+        total_amplitude += amplitude
+        amplitude *= 0.5
+        frequency *= 1.9
+    return value / total_amplitude
+
+
+def _wave_noise(point: Vec3, salt: int, frequency: float) -> float:
+    axes = (
+        (0.87, 0.31, 0.38),
+        (-0.22, 0.91, 0.35),
+        (0.43, -0.57, 0.70),
+        (-0.68, -0.18, 0.71),
+    )
+    phase = salt * 0.173
+    value = 0.0
+    for index, axis in enumerate(axes):
+        dot = point[0] * axis[0] + point[1] * axis[1] + point[2] * axis[2]
+        angle = dot * frequency * (index + 1.3) + phase + index * 1.917
+        value += sin(angle) * 0.72 + cos(angle * 0.63 + phase * 0.31) * 0.28
+    return value / len(axes)
 
 
 def _noise(point: Vec3, salt: int) -> float:

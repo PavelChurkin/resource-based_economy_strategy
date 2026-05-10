@@ -7,6 +7,70 @@ from typing import Mapping, Sequence
 
 
 Inventory = dict[str, float]
+DAYS_PER_YEAR = 360
+ADULT_AGE_YEARS = 16
+BASE32_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+POLICY_COLORS = {
+    "neutral": "#2f80ed",
+    "enemy": "#d63031",
+    "ally": "#f2c94c",
+    "own": "#2fb344",
+}
+
+
+def to_base32(value: int) -> str:
+    if value < 0:
+        raise ValueError("value must be non-negative")
+    if value == 0:
+        return BASE32_ALPHABET[0]
+    digits: list[str] = []
+    base = len(BASE32_ALPHABET)
+    while value:
+        value, remainder = divmod(value, base)
+        digits.append(BASE32_ALPHABET[remainder])
+    return "".join(reversed(digits))
+
+
+def policy_color(relation: str) -> str:
+    try:
+        return POLICY_COLORS[relation]
+    except KeyError as exc:
+        raise ValueError(f"unknown policy relation: {relation}") from exc
+
+
+@dataclass
+class Person:
+    id: str
+    name: str
+    age_days: int
+    alive: bool = True
+    death_cause: str | None = None
+
+    @classmethod
+    def from_index(cls, index: int, *, age_years: int = ADULT_AGE_YEARS) -> Person:
+        if index < 1:
+            raise ValueError("index must be positive")
+        return cls(
+            id=to_base32(index).rjust(4, "0"),
+            name=f"Чел{index}",
+            age_days=age_years * DAYS_PER_YEAR,
+        )
+
+    @property
+    def age_years(self) -> int:
+        return self.age_days // DAYS_PER_YEAR
+
+    @property
+    def is_adult(self) -> bool:
+        return self.alive and self.age_days >= ADULT_AGE_YEARS * DAYS_PER_YEAR
+
+
+@dataclass(frozen=True)
+class Demographics:
+    adults: int
+    children: int
+    unemployed: int
+    vacancies: int
 
 
 @dataclass(frozen=True)
@@ -29,6 +93,11 @@ class BuildingDefinition:
     daily_outputs: Mapping[str, float] = field(default_factory=dict)
     recipes: Sequence[Recipe] = field(default_factory=tuple)
     housing_capacity: int = 0
+    construction_cost: Mapping[str, float] = field(default_factory=dict)
+    required_buildings: tuple[str, ...] = ()
+    vacancies: int = 0
+    storage_capacity_tons: float = 0.0
+    warmth_protection: float = 0.0
     affected_by_precipitation: bool = False
     affected_by_solar: bool = False
     affected_by_wind: bool = False
@@ -38,6 +107,8 @@ class BuildingDefinition:
 class Building:
     name: str
     active: bool = True
+    point_id: int | None = None
+    owner: str | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +197,8 @@ class DayReport:
     unlocked_technologies: list[str]
     deaths: int = 0
     births: int = 0
+    status_events: list[str] = field(default_factory=list)
+    demographics: Demographics | None = None
 
 
 @dataclass
@@ -167,9 +240,29 @@ class Settlement:
     unlocked_technologies: set[str] = field(default_factory=set)
     health: float = 1.0
     birth_progress: float = 0.0
+    player_nickname: str | None = None
+    citizens: list[Person] = field(default_factory=list)
+    status_events: list[str] = field(default_factory=list)
+    _next_person_index: int = 1
+
+    def __post_init__(self) -> None:
+        if self.citizens:
+            self._sync_people_from_citizens()
+            self._next_person_index = max(
+                self._person_index(person) for person in self.citizens
+            ) + 1
 
     def clone(self) -> Settlement:
         return deepcopy(self)
+
+    def living_citizens(self) -> list[Person]:
+        return [person for person in self.citizens if person.alive]
+
+    @property
+    def daily_labor_capacity(self) -> float:
+        if self.citizens:
+            return float(sum(1 for person in self.living_citizens() if person.is_adult))
+        return float(self.people)
 
     @property
     def housing_capacity(self) -> int:
@@ -187,9 +280,67 @@ class Settlement:
             technology = self.config.technologies.get(technology_id)
             if technology is not None:
                 multiplier *= technology.logistics_multiplier
-        return self.people * self.config.base_carry_capacity_per_person * multiplier
+        return (
+            self.daily_labor_capacity
+            * self.config.base_carry_capacity_per_person
+            * multiplier
+        )
+
+    def demographics(self) -> Demographics:
+        if self.citizens:
+            living = self.living_citizens()
+            adults = sum(1 for person in living if person.is_adult)
+            children = len(living) - adults
+        else:
+            adults = self.people
+            children = 0
+        vacancies = 0
+        for building in self.buildings:
+            if building.active:
+                vacancies += self._definition_for(building).vacancies
+        return Demographics(
+            adults=adults,
+            children=children,
+            unemployed=max(0, adults - vacancies),
+            vacancies=vacancies,
+        )
+
+    def available_building_names(self) -> list[str]:
+        active_buildings = {
+            building.name for building in self.buildings if building.active
+        }
+        available: list[str] = []
+        for name, definition in self.config.building_definitions.items():
+            if all(
+                requirement in active_buildings
+                for requirement in definition.required_buildings
+            ):
+                available.append(name)
+        return available
+
+    def plan_building(self, name: str, *, point_id: int | None = None) -> Building:
+        if name not in self.config.building_definitions:
+            raise KeyError(f"Unknown building definition: {name}")
+        if name not in self.available_building_names():
+            raise ValueError(f"building {name!r} is not unlocked yet")
+        definition = self.config.building_definitions[name]
+        if not _has_resources(self.inventory, definition.construction_cost):
+            raise ValueError(f"not enough resources to build {name!r}")
+        for resource, amount in definition.construction_cost.items():
+            _take_resource(self.inventory, resource, amount)
+        building = Building(
+            name=name,
+            point_id=point_id,
+            owner=self.player_nickname,
+        )
+        self.buildings.append(building)
+        location = f" в точке #{point_id}" if point_id is not None else ""
+        self.status_events.append(f"Запланирована постройка {name}{location}.")
+        return building
 
     def tick(self, weather: Weather | None = None) -> DayReport:
+        self._sync_people_from_citizens()
+        event_start = len(self.status_events)
         if weather is not None:
             self.weather = weather
         elif self.latitude is not None:
@@ -200,7 +351,7 @@ class Settlement:
         unlocked = self.unlock_available_technologies()
 
         remaining_logistics = self.daily_logistics_capacity
-        remaining_labor = float(self.people)
+        remaining_labor = self.daily_labor_capacity
 
         for building in self.buildings:
             if not building.active:
@@ -222,10 +373,14 @@ class Settlement:
 
         need_consumed, missing_needs, needs_satisfied_ratio = self._consume_needs()
         _merge_inventory(consumed, need_consumed)
-        deaths, births = self._advance_population(needs_satisfied_ratio)
+        deaths, births = self._advance_population(
+            needs_satisfied_ratio,
+            missing_needs,
+        )
 
         self.day += 1
         unlocked.extend(self.unlock_available_technologies())
+        events = list(self.status_events[event_start:])
         return DayReport(
             day=self.day,
             population=self.people,
@@ -237,6 +392,27 @@ class Settlement:
             unlocked_technologies=sorted(set(unlocked)),
             deaths=deaths,
             births=births,
+            status_events=events,
+            demographics=self.demographics(),
+        )
+
+    def tick_week(self) -> FastForwardReport:
+        start_day = self.day
+        reports = [self.tick() for _ in range(7)]
+        demographics = self.demographics()
+        self.status_events.append(
+            "Неделя "
+            f"{self.day // 7}: взрослые {demographics.adults}, "
+            f"дети {demographics.children}, безработные {demographics.unemployed}, "
+            f"вакансии {demographics.vacancies}."
+        )
+        average = sum(report.needs_satisfied_ratio for report in reports) / 7
+        return FastForwardReport(
+            days=7,
+            start_day=start_day,
+            end_day=self.day,
+            average_needs_satisfied_ratio=average,
+            reports=reports,
         )
 
     def fast_forward(self, days: int) -> FastForwardReport:
@@ -345,7 +521,14 @@ class Settlement:
             return consumed, missing, 1.0
         return consumed, missing, total_satisfied / total_need
 
-    def _advance_population(self, needs_satisfied_ratio: float) -> tuple[int, int]:
+    def _advance_population(
+        self,
+        needs_satisfied_ratio: float,
+        missing_needs: Mapping[str, float] | None = None,
+    ) -> tuple[int, int]:
+        if self.citizens:
+            return self._advance_citizens(needs_satisfied_ratio, missing_needs or {})
+
         deaths = 0
         births = 0
         if self.people <= 0:
@@ -362,6 +545,7 @@ class Settlement:
             deaths = max(1, floor(self.people * 0.02))
             self.people = max(0, self.people - deaths)
             self.health = 0.25
+            self.status_events.append(f"Погибло жителей: {deaths}.")
 
         if needs_satisfied_ratio >= 0.98 and self.people < self.housing_capacity:
             self.birth_progress += self.people * (
@@ -373,7 +557,104 @@ class Settlement:
                 births = min(births, room)
                 self.people += births
                 self.birth_progress -= births
+                self.status_events.append(f"Родилось жителей: {births}.")
         return deaths, births
+
+    def _advance_citizens(
+        self,
+        needs_satisfied_ratio: float,
+        missing_needs: Mapping[str, float],
+    ) -> tuple[int, int]:
+        deaths = 0
+        births = 0
+        living = self.living_citizens()
+        if not living:
+            self.people = 0
+            return deaths, births
+
+        for person in living:
+            was_child = not person.is_adult
+            person.age_days += 1
+            if was_child and person.is_adult:
+                self.status_events.append(
+                    f"{person.name} #{person.id} стал взрослым."
+                )
+
+        if needs_satisfied_ratio < 0.75:
+            self.health -= (0.75 - needs_satisfied_ratio) * (
+                self.config.unmet_need_health_penalty
+            )
+        else:
+            self.health = min(1.0, self.health + 0.02)
+
+        cause = self._death_cause_from_missing_needs(missing_needs)
+        if self.health <= 0:
+            deaths = max(1, floor(len(living) * 0.02))
+            victims = sorted(living, key=lambda person: person.age_days, reverse=True)[
+                :deaths
+            ]
+            for person in victims:
+                person.alive = False
+                person.death_cause = cause
+                self.status_events.append(
+                    f"{person.name} #{person.id} умер от {cause}."
+                )
+            self.health = 0.25
+
+        old_age_victims = [
+            person
+            for person in self.living_citizens()
+            if person.age_days > 90 * DAYS_PER_YEAR
+        ]
+        for person in old_age_victims:
+            person.alive = False
+            person.death_cause = "старости"
+            deaths += 1
+            self.status_events.append(
+                f"{person.name} #{person.id} умер от старости."
+            )
+
+        self._sync_people_from_citizens()
+        if needs_satisfied_ratio >= 0.98 and self.people < self.housing_capacity:
+            self.birth_progress += self.people * (
+                self.config.healthy_birth_rate_per_person_day
+            )
+            births = floor(self.birth_progress)
+            if births:
+                room = self.housing_capacity - self.people
+                births = min(births, room)
+                for _ in range(births):
+                    person = Person.from_index(self._next_person_index, age_years=0)
+                    self._next_person_index += 1
+                    self.citizens.append(person)
+                    self.status_events.append(
+                        f"Родился {person.name} #{person.id}."
+                    )
+                self.birth_progress -= births
+                self._sync_people_from_citizens()
+        return deaths, births
+
+    def _death_cause_from_missing_needs(
+        self,
+        missing_needs: Mapping[str, float],
+    ) -> str:
+        if missing_needs.get("water", 0.0) > 0:
+            return "жажды"
+        if missing_needs.get("food", 0.0) > 0:
+            return "голода"
+        if missing_needs.get("heat", 0.0) > 0 or missing_needs.get("housing", 0.0) > 0:
+            return "холода"
+        return "старости"
+
+    def _sync_people_from_citizens(self) -> None:
+        if self.citizens:
+            self.people = len(self.living_citizens())
+
+    def _person_index(self, person: Person) -> int:
+        value = 0
+        for char in person.id:
+            value = value * len(BASE32_ALPHABET) + BASE32_ALPHABET.index(char)
+        return value
 
     def _weather_factor(self, definition: BuildingDefinition) -> float:
         factor = 1.0
@@ -421,25 +702,124 @@ DEFAULT_BUILDINGS: dict[str, BuildingDefinition] = {
     "camp_center": BuildingDefinition(
         name="camp_center",
         housing_capacity=4,
+        vacancies=1,
     ),
     "forager_hut": BuildingDefinition(
         name="forager_hut",
         daily_outputs={"food": 4.0},
+        vacancies=2,
     ),
     "water_collector": BuildingDefinition(
         name="water_collector",
         daily_outputs={"water": 7.0},
         affected_by_precipitation=True,
+        vacancies=1,
     ),
     "shelter": BuildingDefinition(
         name="shelter",
         housing_capacity=6,
     ),
+    "warehouse": BuildingDefinition(
+        name="warehouse",
+        storage_capacity_tons=250.0,
+        construction_cost={"stone": 3.0, "roundwood": 2.0},
+    ),
+    "quarry": BuildingDefinition(
+        name="quarry",
+        daily_outputs={"stone": 2.0, "sand": 1.0, "clay": 1.0},
+        construction_cost={"stone": 4.0},
+        required_buildings=("warehouse",),
+        vacancies=3,
+    ),
+    "stone_quarry": BuildingDefinition(
+        name="stone_quarry",
+        daily_outputs={"stone": 4.0, "raw_metal": 0.6},
+        construction_cost={"stone": 8.0, "roundwood": 2.0},
+        required_buildings=("warehouse",),
+        vacancies=4,
+    ),
+    "lumberjack_site": BuildingDefinition(
+        name="lumberjack_site",
+        daily_outputs={"roundwood": 4.0},
+        construction_cost={"stone": 2.0, "tools": 0.2},
+        required_buildings=("stone_quarry",),
+        vacancies=4,
+    ),
+    "housing1": BuildingDefinition(
+        name="housing1",
+        housing_capacity=5,
+        construction_cost={"clay": 5.0},
+        required_buildings=("warehouse",),
+        warmth_protection=0.2,
+    ),
+    "housing2": BuildingDefinition(
+        name="housing2",
+        housing_capacity=25,
+        construction_cost={"roundwood": 12.0},
+        required_buildings=("lumberjack_site",),
+        warmth_protection=0.45,
+    ),
+    "housing3": BuildingDefinition(
+        name="housing3",
+        housing_capacity=100,
+        construction_cost={"plank": 28.0},
+        required_buildings=("sawmill",),
+        warmth_protection=0.62,
+    ),
+    "housing4": BuildingDefinition(
+        name="housing4",
+        housing_capacity=500,
+        construction_cost={"brick": 120.0},
+        required_buildings=("brick_factory",),
+        warmth_protection=0.78,
+    ),
+    "housing5": BuildingDefinition(
+        name="housing5",
+        housing_capacity=5000,
+        construction_cost={"concrete": 1100.0, "metal": 120.0},
+        required_buildings=("foundry",),
+        warmth_protection=0.92,
+    ),
+    "brick_factory": BuildingDefinition(
+        name="brick_factory",
+        recipes=[Recipe(inputs={"clay": 2.0}, outputs={"brick": 1.6})],
+        construction_cost={"stone": 12.0, "roundwood": 4.0},
+        required_buildings=("stone_quarry",),
+        vacancies=6,
+    ),
+    "forge": BuildingDefinition(
+        name="forge",
+        recipes=[
+            Recipe(
+                inputs={"raw_metal": 1.5, "roundwood": 0.5},
+                outputs={"tools": 1.0},
+            )
+        ],
+        construction_cost={"stone": 18.0, "roundwood": 6.0},
+        required_buildings=("stone_quarry",),
+        vacancies=4,
+    ),
     "sawmill": BuildingDefinition(
         name="sawmill",
         recipes=[
+            Recipe(inputs={"roundwood": 2.0}, outputs={"plank": 3.0, "sawdust": 1.0}),
             Recipe(inputs={"wood": 2.0}, outputs={"plank": 3.0, "sawdust": 1.0})
         ],
+        construction_cost={"stone": 8.0, "roundwood": 8.0},
+        required_buildings=("lumberjack_site",),
+        vacancies=4,
+    ),
+    "foundry": BuildingDefinition(
+        name="foundry",
+        recipes=[
+            Recipe(
+                inputs={"raw_metal": 3.0, "roundwood": 1.0},
+                outputs={"metal": 1.8},
+            )
+        ],
+        construction_cost={"stone": 20.0, "brick": 10.0},
+        required_buildings=("forge",),
+        vacancies=8,
     ),
     "workshop": BuildingDefinition(
         name="workshop",

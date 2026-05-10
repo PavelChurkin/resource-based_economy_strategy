@@ -1,6 +1,6 @@
 [project]
 name = "resource-based-economy-strategy"
-version = "0.0.4"
+version = "0.0.5"
 description = "Resource-only economy strategy simulation prototype."
 readme = "README.md"
 requires-python = ">=3.11"

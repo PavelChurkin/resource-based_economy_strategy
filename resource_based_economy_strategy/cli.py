@@ -16,6 +16,13 @@ RESOURCE_NAMES = {
     "herbs": "травы",
     "housing": "жильё",
     "iron_ore": "железная руда",
+    "raw_metal": "сырая руда",
+    "sand": "песок",
+    "clay": "глина",
+    "brick": "кирпич",
+    "tools": "инструменты",
+    "metal": "металл",
+    "concrete": "бетон",
     "medicine": "лекарства",
     "plank": "доски",
     "roundwood": "кругляк",
@@ -76,7 +83,7 @@ def run_managed_simulation(
         output = sys.stdout
 
     reason = "Заданное количество дней завершено."
-    print("Ресурсная стратегия 0.0.2", file=output)
+    print("Ресурсная стратегия 0.0.5", file=output)
     print(
         "Цель: сохранить жизнь поселения без денег, только через ресурсы.",
         file=output,

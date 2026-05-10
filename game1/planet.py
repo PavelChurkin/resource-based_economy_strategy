@@ -15,9 +15,9 @@ from dataclasses import dataclass, field
 from math import cos, radians, pi
 from typing import Iterable, Iterator
 
-
 BIOMES = (
     "polar",
+    "lake",
     "tundra",
     "boreal",
     "temperate",
@@ -25,6 +25,7 @@ BIOMES = (
     "desert",
     "tropical",
     "ocean",
+    "mountain",
 )
 
 
@@ -41,18 +42,23 @@ class Terrain:
     river_drop_m: float
     biome: str
     has_river: bool
+    has_lake: bool = False
+    has_mountain: bool = False
+    is_island: bool = False
 
     def __post_init__(self) -> None:
         if self.biome not in BIOMES:
             raise ValueError(
                 f"unknown biome {self.biome!r}; expected one of {BIOMES}"
             )
-        if self.elevation_m < -500.0:
-            raise ValueError("elevation_m must be >= -500")
+        if self.elevation_m < -11000.0:
+            raise ValueError("elevation_m must be >= -11000")
         if self.river_drop_m < 0.0:
             raise ValueError("river_drop_m must be >= 0")
         if self.river_drop_m > 0 and not self.has_river:
             raise ValueError("river_drop_m > 0 requires has_river=True")
+        if self.has_lake and self.biome != "lake":
+            raise ValueError("has_lake requires biome='lake'")
 
 
 @dataclass
@@ -102,7 +108,7 @@ class PlanetTile:
         base = 0.4
         if self.terrain.biome == "ocean":
             base = 0.7
-        elif self.terrain.elevation_m > 800:
+        elif self.terrain.has_mountain or self.terrain.elevation_m > 800:
             base = 0.6
         return base
 
@@ -176,6 +182,8 @@ def build_demo_planet(
     if latitude_step <= 0 or longitude_step <= 0:
         raise ValueError("steps must be positive")
 
+    from .sphere_points import point_from_lat_lon, sample_point_terrain
+
     state = seed & 0xFFFFFFFF
 
     def next_unit() -> float:
@@ -188,25 +196,35 @@ def build_demo_planet(
     while lat <= 90.0 + 1e-9:
         lon = -180.0
         while lon < 180.0 - 1e-9:
-            biome = _biome_for_latitude(lat)
-            elevation = round(next_unit() * 1500.0, 1)
-            has_river = next_unit() < 0.4 and biome not in {"polar", "ocean"}
-            river_drop = round(next_unit() * 60.0, 1) if has_river else 0.0
+            sample = sample_point_terrain(
+                point_from_lat_lon(lat, lon),
+                seed=seed,
+            )
             terrain = Terrain(
-                elevation_m=elevation,
-                river_drop_m=river_drop,
-                biome=biome,
-                has_river=has_river,
+                elevation_m=float(sample.elevation_m),
+                river_drop_m=sample.river_drop_m,
+                biome=sample.biome,
+                has_river=sample.has_river,
+                has_lake=sample.has_lake,
+                has_mountain=sample.has_mountain,
+                is_island=sample.is_island,
             )
             resources: dict[str, float] = {}
+            biome = sample.biome
             if biome in {"boreal", "temperate", "tropical"}:
                 resources["wood"] = round(next_unit() * 100.0, 1)
             if biome in {"steppe", "temperate"}:
                 resources["grain"] = round(next_unit() * 80.0, 1)
-            if biome in {"tundra", "polar", "boreal"}:
+            if biome in {"tundra", "polar", "boreal", "mountain"}:
                 resources["iron_ore"] = round(next_unit() * 50.0, 1)
-            if biome in {"desert", "tropical"}:
+            if biome in {"desert", "tropical", "mountain", "steppe"}:
                 resources["stone"] = round(next_unit() * 90.0, 1)
+            if biome in {"temperate", "steppe", "lake"}:
+                resources["clay"] = round(next_unit() * 70.0, 1)
+            if biome in {"desert", "steppe", "ocean"}:
+                resources["sand"] = round(next_unit() * 60.0, 1)
+            if sample.has_river or sample.has_lake:
+                resources["water"] = round(40.0 + next_unit() * 120.0, 1)
             tiles.append(
                 PlanetTile(
                     latitude=lat,
