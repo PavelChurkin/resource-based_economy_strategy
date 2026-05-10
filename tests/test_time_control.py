@@ -71,9 +71,9 @@ class TimeControllerTests(unittest.TestCase):
         self.controller.skip_weeks(2)
         self.assertEqual(self.controller.day, 14)
         self.controller.skip_months(1)
-        self.assertEqual(self.controller.day, 14 + 30)
+        self.assertEqual(self.controller.day, 14 + 28)
         self.controller.skip_years(1)
-        self.assertEqual(self.controller.day, 14 + 30 + 360)
+        self.assertEqual(self.controller.day, 14 + 28 + 336)
 
     def test_pause_then_resume_does_not_replay_paused_seconds(self) -> None:
         self.controller.resume(TimeMode.NORMAL)

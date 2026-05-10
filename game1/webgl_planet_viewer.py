@@ -97,6 +97,44 @@ _VIEWER_TEMPLATE = """<!doctype html>
 
     canvas:active { cursor: grabbing; }
 
+    #planet {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+    }
+
+    #gridOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      cursor: default;
+    }
+
+    #gridOverlay:active { cursor: default; }
+
+    #buildingMarkers {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    .buildingMarker {
+      position: absolute;
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
+      transform: translate(-50%, -50%);
+      border: 1px solid rgba(230, 236, 242, 0.70);
+      border-radius: 50%;
+      background: rgba(7, 13, 22, 0.82);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+      font-size: 15px;
+      line-height: 1;
+    }
+
     .hud {
       position: fixed;
       top: 14px;
@@ -186,6 +224,35 @@ _VIEWER_TEMPLATE = """<!doctype html>
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 6px;
     }
+
+    .legendGrid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 5px 8px;
+      white-space: normal;
+    }
+
+    .legendItem {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+    }
+
+    .swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      flex: 0 0 auto;
+      border: 1px solid rgba(230, 236, 242, 0.28);
+    }
+
+    details {
+      margin-top: 6px;
+      white-space: normal;
+    }
+
+    summary { cursor: pointer; }
 
     input {
       min-width: 90px;
@@ -280,6 +347,8 @@ _VIEWER_TEMPLATE = """<!doctype html>
 </head>
 <body>
   <canvas id="planet" tabindex="0"></canvas>
+  <canvas id="gridOverlay" aria-hidden="true"></canvas>
+  <div id="buildingMarkers" aria-hidden="true"></div>
   <div class="hud" aria-live="polite">
     <div class="panel" id="stats"></div>
     <div class="panel" id="lod"></div>
@@ -298,6 +367,7 @@ _VIEWER_TEMPLATE = """<!doctype html>
     <div class="panel compact" id="timePanel"></div>
     <button id="pauseButton" title="Pause or resume time" aria-label="Pause or resume time">▶</button>
     <button id="stepWeekButton" title="Advance one week" aria-label="Advance one week">↷</button>
+    <button id="gridLayerButton" title="Toggle grid layer" aria-label="Toggle grid layer">⌗</button>
   </div>
   <div class="tools">
     <button id="zoomIn" title="Zoom in" aria-label="Zoom in">+</button>
@@ -317,6 +387,10 @@ _VIEWER_TEMPLATE = """<!doctype html>
       <div id="policyPanel"></div>
     </div>
     <div class="panel">
+      <h2>Биомы</h2>
+      <div class="legendGrid" id="biomeLegend"></div>
+    </div>
+    <div class="panel">
       <h2>Статус</h2>
       <div class="statusLog" id="statusLog"></div>
     </div>
@@ -326,6 +400,9 @@ _VIEWER_TEMPLATE = """<!doctype html>
   <script>
     const payload = __SPHERE_PAYLOAD__;
     const canvas = document.getElementById("planet");
+    const gridOverlay = document.getElementById("gridOverlay");
+    const gridContext = gridOverlay.getContext("2d");
+    const buildingMarkers = document.getElementById("buildingMarkers");
     const stats = document.getElementById("stats");
     const lodPanel = document.getElementById("lod");
     const errorPanel = document.getElementById("error");
@@ -337,13 +414,20 @@ _VIEWER_TEMPLATE = """<!doctype html>
     const selectedPointPanel = document.getElementById("selectedPointPanel");
     const buildingMenu = document.getElementById("buildingMenu");
     const policyPanel = document.getElementById("policyPanel");
+    const biomeLegend = document.getElementById("biomeLegend");
     const statusLog = document.getElementById("statusLog");
 
     const ZOOM_MIN = 0.55;
-    const ZOOM_MAX = 8.0;
+    const ZOOM_MAX = 3.2;
     const KEY_ROTATE_STEP = 0.05;
     const KEY_ZOOM_STEP = 1.10;
     const WEEK_SECONDS = 5; // tick every 5 seconds
+    const DAYS_PER_WEEK = 7;
+    const WEEKS_PER_MONTH = 4;
+    const MONTHS_PER_YEAR = 12;
+    const BIRTH_WEEKS = 8 * WEEKS_PER_MONTH;
+    const DAILY_FOOD_PER_PERSON = 0.002;
+    const DAILY_WATER_PER_PERSON = 0.003;
     const FEATURE_RIVER = 1;
     const FEATURE_LAKE = 2;
     const FEATURE_MOUNTAIN = 4;
@@ -355,42 +439,47 @@ _VIEWER_TEMPLATE = """<!doctype html>
       ally: "#f2c94c",
     };
     const BUILDINGS = [
-      { id: "warehouse", label: "Склад", cost: { stone: 3, roundwood: 2 }, requires: [], vacancies: 0 },
-      { id: "quarry", label: "Карьер", cost: { stone: 4 }, requires: ["warehouse"], vacancies: 3 },
-      { id: "stone_quarry", label: "Каменоломня", cost: { stone: 8, roundwood: 2 }, requires: ["warehouse"], vacancies: 4 },
-      { id: "lumberjack_site", label: "Место дровосека", cost: { stone: 2, tools: 0.2 }, requires: ["stone_quarry"], vacancies: 4 },
+      { id: "city_center", label: "Центр города", icon: "◎", cost: {}, requires: [], vacancies: 0, capacity: 10, unique: true },
+      { id: "warehouse", label: "Склад", icon: "▣", cost: { stone: 3, roundwood: 2 }, requires: ["city_center"], vacancies: 0 },
+      { id: "pump", label: "Насос", icon: "↧", cost: { roundwood: 2 }, requires: ["city_center"], vacancies: 1 },
+      { id: "farm", label: "Ферма", icon: "▦", cost: { clay: 2, roundwood: 1 }, requires: ["city_center"], vacancies: 2 },
+      { id: "quarry", label: "Карьер", icon: "◫", cost: { stone: 4 }, requires: ["city_center"], vacancies: 3 },
+      { id: "stone_quarry", label: "Каменоломня", icon: "▰", cost: { stone: 8, roundwood: 2 }, requires: ["city_center"], vacancies: 4 },
+      { id: "lumberjack_site", label: "Лесозаготовка", icon: "♧", cost: { stone: 2, tools: 0.2 }, requires: ["stone_quarry"], vacancies: 4 },
+      { id: "mine", label: "Шахта", icon: "▱", cost: { tools: 1, roundwood: 6 }, requires: ["city_center"], vacancies: 4, biome: "mountain", feature: FEATURE_MOUNTAIN },
       { id: "housing1", label: "Жильё1", cost: { clay: 5 }, requires: ["warehouse"], vacancies: 0, capacity: 5 },
       { id: "housing2", label: "Жильё2", cost: { roundwood: 12 }, requires: ["lumberjack_site"], vacancies: 0, capacity: 25 },
       { id: "housing3", label: "Жильё3", cost: { plank: 28 }, requires: ["sawmill"], vacancies: 0, capacity: 100 },
       { id: "housing4", label: "Жильё4", cost: { brick: 120 }, requires: ["brick_factory"], vacancies: 0, capacity: 500 },
       { id: "housing5", label: "Жильё5", cost: { concrete: 1100, metal: 120 }, requires: ["foundry"], vacancies: 0, capacity: 5000 },
-      { id: "brick_factory", label: "Кирпичный завод", cost: { stone: 12, roundwood: 4 }, requires: ["stone_quarry"], vacancies: 6 },
+      { id: "brick_factory", label: "Кирпичный завод", icon: "▤", cost: { stone: 12, roundwood: 4 }, requires: ["quarry"], vacancies: 6 },
       { id: "forge", label: "Кузня", cost: { stone: 18, roundwood: 6 }, requires: ["stone_quarry"], vacancies: 4 },
       { id: "sawmill", label: "Лесопилка", cost: { stone: 8, roundwood: 8 }, requires: ["lumberjack_site"], vacancies: 4 },
       { id: "foundry", label: "Литейный завод", cost: { stone: 20, brick: 10 }, requires: ["forge"], vacancies: 8 },
+      { id: "boiler_house", label: "Котельная", icon: "◈", cost: { stone: 6, roundwood: 4 }, requires: ["city_center"], vacancies: 2 },
     ];
     const gameState = {
       nickname: "Игрок1",
       paused: true,
-      week: 0,
       day: 0,
+      birthProgressWeeks: 0,
       selectedPoint: null,
+      layers: { grid: false },
       resources: {
-        food: 6480,
-        water: 10800,
+        food: 6.72,
+        water: 10.08,
         roundwood: 80,
-        wood: 40,
         stone: 80,
         sand: 30,
         clay: 40,
         raw_metal: 12,
         tools: 2,
-        heat: 120,
+        coal: 8,
+        energy_mw_day: 0,
       },
       people: { adults: 10, children: 0 },
       buildings: [
-        { id: "warehouse", pointId: null, relation: "own" },
-        { id: "housing2", pointId: null, relation: "own" },
+        { id: "city_center", pointId: 0, relation: "own" },
       ],
       status: ["Игрок Игрок1 вошёл в игру: 10 жителей, запас еды и воды на год."],
     };
@@ -426,10 +515,12 @@ _VIEWER_TEMPLATE = """<!doctype html>
       layout(location = 2) in float aElevation;
       layout(location = 3) in float aFeature;
       uniform mat4 uViewProjection;
+      uniform mat4 uViewMatrix;
       uniform float uPointScale;
       uniform float uPlanetRadius;
       out vec3 vColor;
       out vec3 vNormal;
+      out float vFacing;
 
       vec3 biomeColor(float index) {
         int i = int(index + 0.5);
@@ -455,11 +546,13 @@ _VIEWER_TEMPLATE = """<!doctype html>
         vec3 worldPos = aPosition * uPlanetRadius * radiusFactor;
         gl_Position = uViewProjection * vec4(worldPos, 1.0);
         gl_PointSize = max(1.0, uPointScale / max(gl_Position.w, 0.0001));
+        vec3 viewNormal = normalize((uViewMatrix * vec4(aPosition, 0.0)).xyz);
+        vFacing = viewNormal.z;
         vColor = biomeColor(aBiome);
         if (hasFeature(aFeature, 1.0)) vColor = mix(vColor, vec3(0.170, 0.720, 0.930), 0.72);
         if (hasFeature(aFeature, 2.0)) vColor = vec3(0.180, 0.560, 0.720);
         if (hasFeature(aFeature, 4.0)) vColor = mix(vColor, vec3(0.760, 0.760, 0.720), 0.48);
-        vNormal = aPosition;
+        vNormal = viewNormal;
       }
     `;
 
@@ -467,10 +560,12 @@ _VIEWER_TEMPLATE = """<!doctype html>
       precision highp float;
       in vec3 vColor;
       in vec3 vNormal;
+      in float vFacing;
       out vec4 fragColor;
       uniform vec3 uLight;
 
       void main() {
+        if (vFacing <= 0.0) discard;
         vec2 offset = gl_PointCoord - vec2(0.5);
         float distance = dot(offset, offset);
         if (distance > 0.25) discard;
@@ -504,6 +599,7 @@ _VIEWER_TEMPLATE = """<!doctype html>
     gl.useProgram(program);
 
     const uViewProjection = gl.getUniformLocation(program, "uViewProjection");
+    const uViewMatrix = gl.getUniformLocation(program, "uViewMatrix");
     const uPointScale = gl.getUniformLocation(program, "uPointScale");
     const uPlanetRadius = gl.getUniformLocation(program, "uPlanetRadius");
     const uLight = gl.getUniformLocation(program, "uLight");
@@ -577,18 +673,26 @@ _VIEWER_TEMPLATE = """<!doctype html>
         `LOD ${activeIndex + 1}/${levels.length} (LOD switching at zoom thresholds)`;
     }
 
+    function calendarLabel(day) {
+      const weekIndex = Math.floor(day / DAYS_PER_WEEK);
+      const week = weekIndex % WEEKS_PER_MONTH + 1;
+      const month = Math.floor(weekIndex / WEEKS_PER_MONTH) % MONTHS_PER_YEAR + 1;
+      const year = Math.floor(weekIndex / (WEEKS_PER_MONTH * MONTHS_PER_YEAR)) + 1;
+      return `Неделя ${week} / Месяц ${month} / Год ${year}`;
+    }
+
     function resourceLabel(name) {
       return {
         food: "еда",
         water: "вода",
         roundwood: "брёвна",
-        wood: "древесина",
         stone: "камень",
         sand: "песок",
         clay: "глина",
         raw_metal: "сырая руда",
         tools: "инструменты",
-        heat: "тепло",
+        coal: "уголь",
+        energy_mw_day: "энергия",
         plank: "доски",
         brick: "кирпич",
         metal: "металл",
@@ -596,15 +700,38 @@ _VIEWER_TEMPLATE = """<!doctype html>
       }[name] || name;
     }
 
+    function resourceUnit(name) {
+      if (name === "energy_mw_day") return "МВт·сут";
+      return "т";
+    }
+
     function formatCost(cost) {
       const parts = Object.entries(cost || {}).map(([name, amount]) =>
-        `${resourceLabel(name)} ${amount}`,
+        `${resourceLabel(name)} ${amount} ${resourceUnit(name)}`,
       );
       return parts.length ? parts.join(", ") : "без затрат";
     }
 
+    function buildingDefinition(id) {
+      return BUILDINGS.find((item) => item.id === id) || null;
+    }
+
+    function buildingIcon(id) {
+      const definition = buildingDefinition(id);
+      return definition && definition.icon ? definition.icon : "□";
+    }
+
+    function buildingLabel(id) {
+      const definition = buildingDefinition(id);
+      return definition ? definition.label : id;
+    }
+
     function hasBuilding(id) {
       return gameState.buildings.some((building) => building.id === id);
+    }
+
+    function buildingAtPoint(pointId) {
+      return gameState.buildings.find((building) => building.pointId === pointId) || null;
     }
 
     function canAfford(cost) {
@@ -615,13 +742,14 @@ _VIEWER_TEMPLATE = """<!doctype html>
 
     function availableBuildings() {
       return BUILDINGS.filter((building) =>
-        building.requires.every((required) => hasBuilding(required)),
+        building.requires.every((required) => hasBuilding(required)) &&
+        (!building.unique || !hasBuilding(building.id)),
       );
     }
 
     function currentDemographics() {
       const vacancies = gameState.buildings.reduce((total, building) => {
-        const definition = BUILDINGS.find((item) => item.id === building.id);
+        const definition = buildingDefinition(building.id);
         return total + (definition ? definition.vacancies || 0 : 0);
       }, 0);
       const adults = gameState.people.adults;
@@ -634,36 +762,97 @@ _VIEWER_TEMPLATE = """<!doctype html>
       };
     }
 
+    function housingCapacity() {
+      return gameState.buildings.reduce((total, building) => {
+        const definition = buildingDefinition(building.id);
+        return total + (definition ? definition.capacity || 0 : 0);
+      }, 0);
+    }
+
     function pushStatus(message) {
       gameState.status.unshift(message);
       gameState.status = gameState.status.slice(0, 8);
       renderGameUi();
     }
 
+    function biomeName(index) {
+      const biome = (payload.biomes || [])[index];
+      return biome ? biome.name : "unknown";
+    }
+
+    function biomeLabel(name) {
+      return {
+        ocean: "океан",
+        lake: "озеро",
+        polar: "полярный",
+        tundra: "тундра",
+        boreal: "тайга",
+        temperate: "умеренный",
+        steppe: "степь",
+        desert: "пустыня",
+        tropical: "тропики",
+        mountain: "горы",
+      }[name] || name;
+    }
+
+    function latLonForVector(x, y, z) {
+      const latitude = Math.asin(Math.max(-1, Math.min(1, z))) * 180 / Math.PI;
+      const longitude = Math.atan2(y, x) * 180 / Math.PI;
+      return { latitude, longitude };
+    }
+
+    function climateSummaryForLatitude(latitude) {
+      const months = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
+      const absLatitude = Math.abs(latitude);
+      return months.map((month, index) => {
+        const yearFraction = index / 12;
+        const seasonal = Math.sin(2 * Math.PI * (yearFraction - 0.25));
+        const hemisphereSeason = latitude >= 0 ? seasonal : -seasonal;
+        const base = 24 - absLatitude * 0.42;
+        const amplitude = 4 + absLatitude * 0.18;
+        const temperature = base + amplitude * hemisphereSeason;
+        const rainfall = absLatitude < 20 ? 90 : absLatitude < 55 ? 55 : 24;
+        return `${month}: ${temperature.toFixed(0)}°C, ${rainfall} мм`;
+      }).join("<br>");
+    }
+
+    function renderBiomeLegend() {
+      biomeLegend.innerHTML = (payload.biomes || []).map((biome) =>
+        `<span class="legendItem"><span class="swatch" style="background:${biome.color}"></span>${biomeLabel(biome.name)}</span>`
+      ).join("");
+    }
+
     function renderGameUi() {
       const demographics = currentDemographics();
+      const dateLabel = calendarLabel(gameState.day);
       timePanel.textContent = gameState.paused
-        ? `Пауза | неделя ${gameState.week} | планирование доступно`
-        : `Время идёт | неделя ${gameState.week} | тик 1 неделя / ${WEEK_SECONDS} c`;
+        ? `Пауза | ${dateLabel} | планирование доступно`
+        : `Время идёт | ${dateLabel} | тик 1 неделя / ${WEEK_SECONDS} c`;
       pauseButton.textContent = gameState.paused ? "▶" : "Ⅱ";
 
       const resourceEntries = Object.entries(gameState.resources)
-        .filter(([, amount]) => amount > 0.001)
+        .filter(([, amount]) => amount > 0.000001)
         .slice(0, 12)
-        .map(([name, amount]) => `<span>${resourceLabel(name)} ${amount.toFixed(1)} т</span>`)
+        .map(([name, amount]) =>
+          `<span>${resourceLabel(name)} ${amount.toFixed(3)} ${resourceUnit(name)}</span>`
+        )
         .join("");
       resourcesPanel.innerHTML = `<h2>Склад</h2><div class="resourceGrid">${resourceEntries}</div>`;
       demographicsPanel.innerHTML =
         `<h2>Демография</h2>` +
         `<p>взрослые ${demographics.adults} · дети ${demographics.children} · ` +
-        `безработные ${demographics.unemployed} · вакансии ${demographics.vacancies}</p>`;
+        `безработные ${demographics.unemployed} · вакансии ${demographics.vacancies} · ` +
+        `жильё ${housingCapacity()}</p>`;
 
       if (gameState.selectedPoint === null) {
         selectedPointPanel.innerHTML =
-          `<h2>Точка</h2><p>Выбор активен только на максимальном LOD.</p>`;
+          activeIndex === levels.length - 1
+            ? `<h2>Точка</h2><p>Выберите точку на планете.</p>`
+            : `<h2>Точка</h2><p>Выбор активен только на максимальном LOD.</p>`;
       } else {
         const point = gameState.selectedPoint;
         const flags = point.features;
+        const existingBuilding = buildingAtPoint(point.id);
         const featureNames = [];
         if (flags & FEATURE_RIVER) featureNames.push("река");
         if (flags & FEATURE_LAKE) featureNames.push("озеро");
@@ -671,16 +860,26 @@ _VIEWER_TEMPLATE = """<!doctype html>
         if (flags & FEATURE_ISLAND) featureNames.push("редкий остров");
         selectedPointPanel.innerHTML =
           `<h2>Точка #${point.id}</h2>` +
-          `<p>LOD ${activeIndex + 1}, высота ${point.elevation} м` +
-          `${featureNames.length ? `, ${featureNames.join(", ")}` : ""}</p>`;
+          `<p>LOD ${activeIndex + 1}, ${biomeLabel(point.biome)}, высота ${point.elevation} м` +
+          `${featureNames.length ? `, ${featureNames.join(", ")}` : ""}</p>` +
+          `<p>широта ${point.latitude.toFixed(1)}°, долгота ${point.longitude.toFixed(1)}°</p>` +
+          `<p>постройка: ${
+            existingBuilding
+              ? `${buildingIcon(existingBuilding.id)} ${buildingLabel(existingBuilding.id)}`
+              : "нет"
+          }</p>` +
+          `<details><summary>Климат года</summary>${climateSummaryForLatitude(point.latitude)}</details>`;
       }
 
       buildingMenu.innerHTML = "";
       for (const building of availableBuildings()) {
         const button = document.createElement("button");
         button.type = "button";
-        button.textContent = `${building.label} · ${formatCost(building.cost)}`;
-        const disabled = gameState.selectedPoint === null || !canAfford(building.cost);
+        button.textContent = `${building.icon || "□"} ${building.label} · ${formatCost(building.cost)}`;
+        const disabled =
+          gameState.selectedPoint === null ||
+          !canAfford(building.cost) ||
+          !canPlaceOnSelectedPoint(building);
         button.disabled = disabled;
         button.addEventListener("click", () => planBuilding(building));
         buildingMenu.appendChild(button);
@@ -692,8 +891,20 @@ _VIEWER_TEMPLATE = """<!doctype html>
       statusLog.innerHTML = gameState.status.map((item) => `<div>${item}</div>`).join("");
     }
 
+    function canPlaceOnSelectedPoint(building) {
+      if (gameState.selectedPoint === null) return false;
+      if (buildingAtPoint(gameState.selectedPoint.id)) return false;
+      if (building.biome && gameState.selectedPoint.biome !== building.biome) return false;
+      if (building.feature && (gameState.selectedPoint.features & building.feature) !== building.feature) return false;
+      return true;
+    }
+
     function planBuilding(building) {
-      if (gameState.selectedPoint === null || !canAfford(building.cost)) return;
+      if (
+        gameState.selectedPoint === null ||
+        !canAfford(building.cost) ||
+        !canPlaceOnSelectedPoint(building)
+      ) return;
       for (const [name, amount] of Object.entries(building.cost || {})) {
         gameState.resources[name] = Math.max(0, (gameState.resources[name] || 0) - amount);
       }
@@ -702,17 +913,42 @@ _VIEWER_TEMPLATE = """<!doctype html>
         pointId: gameState.selectedPoint.id,
         relation: "own",
       });
+      focusPointById(gameState.selectedPoint.id);
       pushStatus(`${gameState.nickname}: ${building.label} запланирована в точке #${gameState.selectedPoint.id}.`);
     }
 
     function advanceWeek() {
-      gameState.week += 1;
       gameState.day += 7;
-      const people = gameState.people.adults + gameState.people.children;
-      gameState.resources.food = (gameState.resources.food || 0) - people * 1.8 * 7;
-      gameState.resources.water = (gameState.resources.water || 0) - people * 3.0 * 7;
+      const peopleBefore = gameState.people.adults + gameState.people.children;
+      const weeklyFood = DAILY_FOOD_PER_PERSON * DAYS_PER_WEEK;
+      const weeklyWater = DAILY_WATER_PER_PERSON * DAYS_PER_WEEK;
+      let peopleServed = 0;
+      let deaths = 0;
+      for (let index = 0; index < peopleBefore; index += 1) {
+        if (
+          (gameState.resources.water || 0) + 1e-9 >= weeklyWater &&
+          (gameState.resources.food || 0) + 1e-9 >= weeklyFood
+        ) {
+          gameState.resources.water -= weeklyWater;
+          gameState.resources.food -= weeklyFood;
+          peopleServed += 1;
+        } else {
+          deaths += 1;
+        }
+      }
+      if (deaths > 0) {
+        const adultDeaths = Math.min(gameState.people.adults, deaths);
+        gameState.people.adults -= adultDeaths;
+        gameState.people.children = Math.max(0, gameState.people.children - (deaths - adultDeaths));
+      }
 
       for (const building of gameState.buildings) {
+        if (building.id === "pump") {
+          gameState.resources.water = (gameState.resources.water || 0) + 0.08 * DAYS_PER_WEEK;
+        }
+        if (building.id === "farm") {
+          gameState.resources.food = (gameState.resources.food || 0) + 0.06 * DAYS_PER_WEEK;
+        }
         if (building.id === "quarry") {
           gameState.resources.stone = (gameState.resources.stone || 0) + 14;
           gameState.resources.sand = (gameState.resources.sand || 0) + 7;
@@ -720,24 +956,42 @@ _VIEWER_TEMPLATE = """<!doctype html>
         }
         if (building.id === "stone_quarry") {
           gameState.resources.stone = (gameState.resources.stone || 0) + 28;
-          gameState.resources.raw_metal = (gameState.resources.raw_metal || 0) + 4.2;
         }
         if (building.id === "lumberjack_site") {
           gameState.resources.roundwood = (gameState.resources.roundwood || 0) + 28;
         }
+        if (building.id === "mine") {
+          gameState.resources.raw_metal = (gameState.resources.raw_metal || 0) + 5.6;
+        }
+        if (building.id === "brick_factory" && (gameState.resources.clay || 0) >= 14) {
+          gameState.resources.clay -= 14;
+          gameState.resources.brick = (gameState.resources.brick || 0) + 11.2;
+        }
+        if (building.id === "boiler_house" && (gameState.resources.roundwood || 0) >= 7) {
+          gameState.resources.roundwood -= 7;
+          gameState.resources.energy_mw_day = (gameState.resources.energy_mw_day || 0) + 0.28;
+        }
       }
 
-      if (gameState.resources.water < 0 || gameState.resources.food < 0) {
-        const cause = gameState.resources.water < 0 ? "жажды" : "голода";
-        gameState.resources.water = Math.max(0, gameState.resources.water);
-        gameState.resources.food = Math.max(0, gameState.resources.food);
-        if (gameState.people.adults > 0) {
-          gameState.people.adults -= 1;
-          pushStatus(`Чел${gameState.people.adults + 1} умер от ${cause}.`);
+      if (deaths > 0) {
+        pushStatus(`Неделя ${Math.floor(gameState.day / DAYS_PER_WEEK)}: ${deaths} жителей умерли от нехватки воды или еды одновременно.`);
+        return;
+      }
+
+      const peopleAfter = gameState.people.adults + gameState.people.children;
+      if (peopleServed === peopleBefore && peopleAfter < housingCapacity()) {
+        gameState.birthProgressWeeks += Math.floor(gameState.people.adults / 2);
+        const births = Math.floor(gameState.birthProgressWeeks / BIRTH_WEEKS);
+        if (births > 0) {
+          const room = housingCapacity() - peopleAfter;
+          const actualBirths = Math.min(room, births);
+          gameState.people.children += actualBirths;
+          gameState.birthProgressWeeks -= actualBirths * BIRTH_WEEKS;
+          pushStatus(`Неделя ${Math.floor(gameState.day / DAYS_PER_WEEK)}: родилось ${actualBirths}.`);
           return;
         }
       }
-      pushStatus(`Неделя ${gameState.week}: склад обновлён, время можно поставить на паузу.`);
+      pushStatus(`Неделя ${Math.floor(gameState.day / DAYS_PER_WEEK)}: склад обновлён, время можно поставить на паузу.`);
     }
 
     function buildPerspective(aspect) {
@@ -816,6 +1070,8 @@ _VIEWER_TEMPLATE = """<!doctype html>
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clearColor(0.02, 0.04, 0.08, 1);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
@@ -825,6 +1081,7 @@ _VIEWER_TEMPLATE = """<!doctype html>
       const viewProjection = multiply(projection, view);
       currentViewProjection = viewProjection;
       gl.uniformMatrix4fv(uViewProjection, false, viewProjection);
+      gl.uniformMatrix4fv(uViewMatrix, false, view);
 
       const level = levels[activeIndex];
       const densityFactor = Math.sqrt(20000 / Math.max(1, level.count));
@@ -835,6 +1092,8 @@ _VIEWER_TEMPLATE = """<!doctype html>
       gl.bindVertexArray(level.vao);
       gl.drawArrays(gl.POINTS, 0, level.count);
       gl.bindVertexArray(null);
+      drawGridLayer();
+      renderBuildingMarkers();
     }
 
     function projectPoint(matrix, x, y, z) {
@@ -847,6 +1106,146 @@ _VIEWER_TEMPLATE = """<!doctype html>
         x: (clipX / clipW * 0.5 + 0.5) * canvas.clientWidth,
         y: (-clipY / clipW * 0.5 + 0.5) * canvas.clientHeight,
       };
+    }
+
+    function frontFacingPoint(x, y, z) {
+      const matrix = rotationMatrix();
+      const viewZ = matrix[2] * x + matrix[6] * y + matrix[10] * z;
+      return viewZ > 0.0;
+    }
+
+    function spherePoint(latitude, longitude) {
+      const lat = latitude * Math.PI / 180;
+      const lon = longitude * Math.PI / 180;
+      const cosLat = Math.cos(lat);
+      return {
+        x: cosLat * Math.cos(lon),
+        y: cosLat * Math.sin(lon),
+        z: Math.sin(lat),
+      };
+    }
+
+    function resizeOverlayCanvas() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const width = Math.floor(gridOverlay.clientWidth * dpr);
+      const height = Math.floor(gridOverlay.clientHeight * dpr);
+      if (gridOverlay.width !== width || gridOverlay.height !== height) {
+        gridOverlay.width = width;
+        gridOverlay.height = height;
+      }
+      gridContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function drawProjectedPolyline(points) {
+      let drawing = false;
+      for (const point of points) {
+        const visible = frontFacingPoint(point.x, point.y, point.z);
+        const projected = visible
+          ? projectPoint(currentViewProjection, point.x, point.y, point.z)
+          : null;
+        if (!projected) {
+          drawing = false;
+          continue;
+        }
+        if (!drawing) {
+          gridContext.moveTo(projected.x, projected.y);
+          drawing = true;
+        } else {
+          gridContext.lineTo(projected.x, projected.y);
+        }
+      }
+    }
+
+    function drawGridLayer() {
+      resizeOverlayCanvas();
+      gridContext.clearRect(0, 0, gridOverlay.clientWidth, gridOverlay.clientHeight);
+      if (!gameState.layers.grid || !currentViewProjection) return;
+      gridContext.save();
+      gridContext.strokeStyle = "rgba(230, 236, 242, 0.36)";
+      gridContext.lineWidth = 1;
+      gridContext.beginPath();
+      for (let latitude = -60; latitude <= 60; latitude += 30) {
+        const points = [];
+        for (let longitude = -180; longitude <= 180; longitude += 4) {
+          points.push(spherePoint(latitude, longitude));
+        }
+        drawProjectedPolyline(points);
+      }
+      for (let longitude = -150; longitude <= 180; longitude += 30) {
+        const points = [];
+        for (let latitude = -88; latitude <= 88; latitude += 4) {
+          points.push(spherePoint(latitude, longitude));
+        }
+        drawProjectedPolyline(points);
+      }
+      gridContext.stroke();
+      gridContext.restore();
+    }
+
+    function maxLevel() {
+      return levels[levels.length - 1];
+    }
+
+    function pointVectorForId(pointId) {
+      const level = maxLevel();
+      if (pointId === null || pointId < 0 || pointId >= level.count) return null;
+      const offset = pointId * 3;
+      return {
+        x: level.positions[offset],
+        y: level.positions[offset + 1],
+        z: level.positions[offset + 2],
+      };
+    }
+
+    function selectPointById(pointId) {
+      const level = maxLevel();
+      if (pointId === null || pointId < 0 || pointId >= level.count) return false;
+      const offset = pointId * 3;
+      const latitudeLongitude = latLonForVector(
+        level.positions[offset],
+        level.positions[offset + 1],
+        level.positions[offset + 2],
+      );
+      gameState.selectedPoint = {
+        id: pointId,
+        elevation: level.elevations[pointId],
+        features: level.features[pointId],
+        biome: biomeName(level.biomes[pointId]),
+        latitude: latitudeLongitude.latitude,
+        longitude: latitudeLongitude.longitude,
+      };
+      return true;
+    }
+
+    function renderBuildingMarkers() {
+      buildingMarkers.innerHTML = "";
+      if (!currentViewProjection) return;
+      for (const building of gameState.buildings) {
+        const point = pointVectorForId(building.pointId);
+        if (!point || !frontFacingPoint(point.x, point.y, point.z)) continue;
+        const projected = projectPoint(currentViewProjection, point.x, point.y, point.z);
+        if (!projected) continue;
+        const marker = document.createElement("span");
+        marker.className = "buildingMarker";
+        marker.textContent = buildingIcon(building.id);
+        marker.title = buildingLabel(building.id);
+        marker.style.left = `${projected.x}px`;
+        marker.style.top = `${projected.y}px`;
+        buildingMarkers.appendChild(marker);
+      }
+    }
+
+    function focusPointById(pointId) {
+      const point = pointVectorForId(pointId);
+      if (!point) return;
+      rotationY = Math.atan2(-point.x, point.z);
+      const horizontalZ = Math.sqrt(point.x * point.x + point.z * point.z);
+      rotationX = Math.atan2(-point.y, horizontalZ);
+      rotationZ = 0.0;
+      zoom = Math.max(zoom, 2.4);
+      selectPointById(pointId);
+      refreshActiveLevel();
+      draw();
     }
 
     function selectNearestPoint(clientX, clientY) {
@@ -865,11 +1264,15 @@ _VIEWER_TEMPLATE = """<!doctype html>
       let bestDistance = Infinity;
       for (let index = 0; index < level.count; index += stride) {
         const offset = index * 3;
+        const x = level.positions[offset];
+        const y = level.positions[offset + 1];
+        const z = level.positions[offset + 2];
+        if (!frontFacingPoint(x, y, z)) continue;
         const projected = projectPoint(
           currentViewProjection,
-          level.positions[offset],
-          level.positions[offset + 1],
-          level.positions[offset + 2],
+          x,
+          y,
+          z,
         );
         if (!projected) continue;
         const dx = projected.x - targetX;
@@ -881,12 +1284,7 @@ _VIEWER_TEMPLATE = """<!doctype html>
         }
       }
       if (bestIndex >= 0) {
-        gameState.selectedPoint = {
-          id: bestIndex,
-          elevation: level.elevations[bestIndex],
-          features: level.features[bestIndex],
-        };
-        pushStatus(`Выбрана точка #${bestIndex}.`);
+        if (selectPointById(bestIndex)) pushStatus(`Выбрана точка #${bestIndex}.`);
       }
     }
 
@@ -910,12 +1308,18 @@ _VIEWER_TEMPLATE = """<!doctype html>
     }
 
     function resetCamera() {
-      rotationX = -0.28;
-      rotationY = 0.54;
-      rotationZ = 0.0;
-      zoom = 1.0;
-      refreshActiveLevel();
-      draw();
+      const cityCenter = gameState.buildings.find((building) => building.id === "city_center");
+      if (cityCenter && cityCenter.pointId !== null) {
+        zoom = 2.4;
+        focusPointById(cityCenter.pointId);
+      } else {
+        rotationX = -0.28;
+        rotationY = 0.54;
+        rotationZ = 0.0;
+        zoom = 1.0;
+        refreshActiveLevel();
+        draw();
+      }
     }
 
     function isTextEntryTarget(target) {
@@ -1015,6 +1419,12 @@ _VIEWER_TEMPLATE = """<!doctype html>
       advanceWeek();
       canvas.focus({ preventScroll: true });
     });
+    document.getElementById("gridLayerButton").addEventListener("click", () => {
+      gameState.layers.grid = !gameState.layers.grid;
+      draw();
+      pushStatus(gameState.layers.grid ? "Слой меридианов и параллелей включён." : "Слой меридианов и параллелей скрыт.");
+      canvas.focus({ preventScroll: true });
+    });
 
     window.setInterval(() => {
       if (!gameState.paused) advanceWeek();
@@ -1044,10 +1454,13 @@ _VIEWER_TEMPLATE = """<!doctype html>
 
     canvas.style.width = "100vw";
     canvas.style.height = "100vh";
+    gridOverlay.style.width = "100vw";
+    gridOverlay.style.height = "100vh";
     canvas.focus({ preventScroll: true });
+    renderBiomeLegend();
     refreshActiveLevel();
     renderGameUi();
-    draw();
+    resetCamera();
   </script>
 </body>
 </html>

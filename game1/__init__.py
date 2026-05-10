@@ -39,7 +39,7 @@ from .sphere_points import (
     sample_point_terrain,
 )
 from .tech_tree import Technology, TechTree, load_tech_tree, parse_tech_tree
-from .time_control import TimeController, TimeMode
+from .time_control import TimeController, TimeMode, calendar_label
 from .webgl_planet_viewer import render_webgl_viewer_html, write_webgl_viewer_html
 
 __all__ = [
@@ -77,4 +77,5 @@ __all__ = [
     "parse_tech_tree",
     "TimeController",
     "TimeMode",
+    "calendar_label",
 ]

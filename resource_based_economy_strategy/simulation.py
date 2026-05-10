@@ -7,9 +7,15 @@ from typing import Mapping, Sequence
 
 
 Inventory = dict[str, float]
-DAYS_PER_YEAR = 360
+DAYS_PER_WEEK = 7
+WEEKS_PER_MONTH = 4
+MONTHS_PER_YEAR = 12
+DAYS_PER_MONTH = DAYS_PER_WEEK * WEEKS_PER_MONTH
+DAYS_PER_YEAR = DAYS_PER_MONTH * MONTHS_PER_YEAR
 ADULT_AGE_YEARS = 16
 BASE32_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+ENERGY_RESOURCE = "energy_mw_day"
+BUILDING_FEATURE_MOUNTAIN = 4
 POLICY_COLORS = {
     "neutral": "#2f80ed",
     "enemy": "#d63031",
@@ -101,6 +107,9 @@ class BuildingDefinition:
     affected_by_precipitation: bool = False
     affected_by_solar: bool = False
     affected_by_wind: bool = False
+    allowed_biomes: tuple[str, ...] = ()
+    required_features: int = 0
+    unique: bool = False
 
 
 @dataclass
@@ -219,12 +228,12 @@ class SimulationConfig:
         default_factory=lambda: dict(DEFAULT_TECHNOLOGIES)
     )
     per_person_daily_needs: Mapping[str, float] = field(
-        default_factory=lambda: {"food": 1.8, "water": 3.0}
+        default_factory=lambda: {"food": 0.002, "water": 0.003}
     )
     cold_temperature_c: float = 8.0
-    heat_per_person_when_cold: float = 1.2
+    energy_mw_day_per_person_when_cold: float = 0.001
     base_carry_capacity_per_person: float = 16.0
-    healthy_birth_rate_per_person_day: float = 0.0007
+    birth_interval_days: int = 8 * DAYS_PER_MONTH
     unmet_need_health_penalty: float = 0.09
 
 
@@ -311,6 +320,8 @@ class Settlement:
         }
         available: list[str] = []
         for name, definition in self.config.building_definitions.items():
+            if definition.unique and name in active_buildings:
+                continue
             if all(
                 requirement in active_buildings
                 for requirement in definition.required_buildings
@@ -318,12 +329,33 @@ class Settlement:
                 available.append(name)
         return available
 
-    def plan_building(self, name: str, *, point_id: int | None = None) -> Building:
+    def plan_building(
+        self,
+        name: str,
+        *,
+        point_id: int | None = None,
+        point_biome: str | None = None,
+        point_features: int = 0,
+    ) -> Building:
         if name not in self.config.building_definitions:
             raise KeyError(f"Unknown building definition: {name}")
         if name not in self.available_building_names():
             raise ValueError(f"building {name!r} is not unlocked yet")
         definition = self.config.building_definitions[name]
+        if point_id is not None and any(
+            building.active and building.point_id == point_id
+            for building in self.buildings
+        ):
+            raise ValueError(f"point #{point_id} already has a building")
+        if definition.allowed_biomes and point_biome not in definition.allowed_biomes:
+            expected = ", ".join(definition.allowed_biomes)
+            raise ValueError(f"building {name!r} can be placed only on: {expected}")
+        if (
+            definition.required_features
+            and (point_features & definition.required_features)
+            != definition.required_features
+        ):
+            raise ValueError(f"building {name!r} cannot be placed on this point")
         if not _has_resources(self.inventory, definition.construction_cost):
             raise ValueError(f"not enough resources to build {name!r}")
         for resource, amount in definition.construction_cost.items():
@@ -357,10 +389,11 @@ class Settlement:
             if not building.active:
                 continue
             definition = self._definition_for(building)
-            remaining_logistics = self._apply_building_io(
+            remaining_labor, remaining_logistics = self._apply_building_io(
                 definition,
                 produced,
                 consumed,
+                remaining_labor,
                 remaining_logistics,
             )
             remaining_labor, remaining_logistics = self._apply_recipes(
@@ -371,11 +404,17 @@ class Settlement:
                 remaining_logistics,
             )
 
-        need_consumed, missing_needs, needs_satisfied_ratio = self._consume_needs()
+        (
+            need_consumed,
+            missing_needs,
+            needs_satisfied_ratio,
+            resource_deaths,
+        ) = self._consume_needs()
         _merge_inventory(consumed, need_consumed)
         deaths, births = self._advance_population(
             needs_satisfied_ratio,
             missing_needs,
+            resource_deaths,
         )
 
         self.day += 1
@@ -449,15 +488,21 @@ class Settlement:
         definition: BuildingDefinition,
         produced: Inventory,
         consumed: Inventory,
+        remaining_labor: float,
         remaining_logistics: float,
-    ) -> float:
+    ) -> tuple[float, float]:
+        if not definition.daily_inputs and not definition.daily_outputs:
+            return remaining_labor, remaining_logistics
         if not _has_resources(self.inventory, definition.daily_inputs):
-            return remaining_logistics
+            return remaining_labor, remaining_logistics
+        required_labor = float(definition.vacancies)
+        if required_labor > remaining_labor:
+            return remaining_labor, remaining_logistics
         transport_mass = sum(definition.daily_inputs.values()) + sum(
             definition.daily_outputs.values()
         )
         if transport_mass > remaining_logistics:
-            return remaining_logistics
+            return remaining_labor, remaining_logistics
         factor = self._weather_factor(definition)
         for resource, amount in definition.daily_inputs.items():
             _take_resource(self.inventory, resource, amount)
@@ -466,7 +511,7 @@ class Settlement:
             actual_amount = amount * factor
             _add_resource(self.inventory, resource, actual_amount)
             _add_resource(produced, resource, actual_amount)
-        return remaining_logistics - transport_mass
+        return remaining_labor - required_labor, remaining_logistics - transport_mass
 
     def _apply_recipes(
         self,
@@ -493,13 +538,20 @@ class Settlement:
             remaining_logistics -= recipe.transport_mass
         return remaining_labor, remaining_logistics
 
-    def _consume_needs(self) -> tuple[Inventory, Inventory, float]:
+    def _consume_needs(
+        self,
+    ) -> tuple[Inventory, Inventory, float, list[tuple[Person, str]]]:
+        if self.citizens:
+            return self._consume_citizen_needs()
+
         needs = {
             resource: amount * self.people
             for resource, amount in self.config.per_person_daily_needs.items()
         }
         if self.weather.temperature_c < self.config.cold_temperature_c:
-            needs["heat"] = self.config.heat_per_person_when_cold * self.people
+            needs[ENERGY_RESOURCE] = (
+                self.config.energy_mw_day_per_person_when_cold * self.people
+            )
         if self.people > self.housing_capacity:
             unhoused = self.people - self.housing_capacity
             needs["housing"] = float(unhoused)
@@ -518,16 +570,61 @@ class Settlement:
             if taken < required:
                 missing[resource] = required - taken
         if total_need == 0:
-            return consumed, missing, 1.0
-        return consumed, missing, total_satisfied / total_need
+            return consumed, missing, 1.0, []
+        return consumed, missing, total_satisfied / total_need, []
+
+    def _consume_citizen_needs(
+        self,
+    ) -> tuple[Inventory, Inventory, float, list[tuple[Person, str]]]:
+        per_person_needs = dict(self.config.per_person_daily_needs)
+        if self.weather.temperature_c < self.config.cold_temperature_c:
+            per_person_needs[ENERGY_RESOURCE] = (
+                self.config.energy_mw_day_per_person_when_cold
+            )
+
+        living = self.living_citizens()
+        housing_shortfall = max(0, len(living) - self.housing_capacity)
+        total_need = sum(per_person_needs.values()) * len(living) + housing_shortfall
+        total_satisfied = 0.0
+        consumed: Inventory = {}
+        missing: Inventory = {}
+        resource_deaths: list[tuple[Person, str]] = []
+
+        if housing_shortfall:
+            missing["housing"] = float(housing_shortfall)
+
+        for person in living:
+            death_cause: str | None = None
+            for resource, required in per_person_needs.items():
+                available = self.inventory.get(resource, 0.0)
+                taken = min(available, required)
+                if taken > 0:
+                    _take_resource(self.inventory, resource, taken)
+                    _add_resource(consumed, resource, taken)
+                total_satisfied += taken
+                if taken + 1e-12 < required:
+                    _add_resource(missing, resource, required - taken)
+                    if death_cause is None:
+                        death_cause = self._death_cause_for_resource(resource)
+            if death_cause is not None:
+                resource_deaths.append((person, death_cause))
+
+        if total_need == 0:
+            return consumed, missing, 1.0, resource_deaths
+        return consumed, missing, total_satisfied / total_need, resource_deaths
 
     def _advance_population(
         self,
         needs_satisfied_ratio: float,
         missing_needs: Mapping[str, float] | None = None,
+        resource_deaths: Sequence[tuple[Person, str]] = (),
     ) -> tuple[int, int]:
         if self.citizens:
-            return self._advance_citizens(needs_satisfied_ratio, missing_needs or {})
+            return self._advance_citizens(
+                needs_satisfied_ratio,
+                missing_needs or {},
+                resource_deaths,
+            )
 
         deaths = 0
         births = 0
@@ -548,10 +645,10 @@ class Settlement:
             self.status_events.append(f"Погибло жителей: {deaths}.")
 
         if needs_satisfied_ratio >= 0.98 and self.people < self.housing_capacity:
-            self.birth_progress += self.people * (
-                self.config.healthy_birth_rate_per_person_day
-            )
-            births = floor(self.birth_progress)
+            birth_pairs = self.people // 2
+            if birth_pairs:
+                self.birth_progress += birth_pairs / self.config.birth_interval_days
+            births = floor(self.birth_progress + 1e-9)
             if births:
                 room = self.housing_capacity - self.people
                 births = min(births, room)
@@ -564,6 +661,7 @@ class Settlement:
         self,
         needs_satisfied_ratio: float,
         missing_needs: Mapping[str, float],
+        resource_deaths: Sequence[tuple[Person, str]] = (),
     ) -> tuple[int, int]:
         deaths = 0
         births = 0
@@ -587,8 +685,17 @@ class Settlement:
         else:
             self.health = min(1.0, self.health + 0.02)
 
+        for person, cause in resource_deaths:
+            if person.alive:
+                person.alive = False
+                person.death_cause = cause
+                deaths += 1
+                self.status_events.append(
+                    f"{person.name} #{person.id} умер от {cause}."
+                )
+
         cause = self._death_cause_from_missing_needs(missing_needs)
-        if self.health <= 0:
+        if self.health <= 0 and deaths == 0:
             deaths = max(1, floor(len(living) * 0.02))
             victims = sorted(living, key=lambda person: person.age_days, reverse=True)[
                 :deaths
@@ -616,10 +723,11 @@ class Settlement:
 
         self._sync_people_from_citizens()
         if needs_satisfied_ratio >= 0.98 and self.people < self.housing_capacity:
-            self.birth_progress += self.people * (
-                self.config.healthy_birth_rate_per_person_day
-            )
-            births = floor(self.birth_progress)
+            adults = sum(1 for person in self.living_citizens() if person.is_adult)
+            birth_pairs = adults // 2
+            if birth_pairs:
+                self.birth_progress += birth_pairs / self.config.birth_interval_days
+            births = floor(self.birth_progress + 1e-9)
             if births:
                 room = self.housing_capacity - self.people
                 births = min(births, room)
@@ -642,9 +750,21 @@ class Settlement:
             return "жажды"
         if missing_needs.get("food", 0.0) > 0:
             return "голода"
-        if missing_needs.get("heat", 0.0) > 0 or missing_needs.get("housing", 0.0) > 0:
+        if (
+            missing_needs.get(ENERGY_RESOURCE, 0.0) > 0
+            or missing_needs.get("housing", 0.0) > 0
+        ):
             return "холода"
         return "старости"
+
+    def _death_cause_for_resource(self, resource: str) -> str:
+        if resource == "water":
+            return "жажды"
+        if resource == "food":
+            return "голода"
+        if resource == ENERGY_RESOURCE:
+            return "холода"
+        return self._death_cause_from_missing_needs({resource: 1.0})
 
     def _sync_people_from_citizens(self) -> None:
         if self.citizens:
@@ -699,6 +819,12 @@ def _merge_inventory(target: Inventory, source: Mapping[str, float]) -> None:
 
 
 DEFAULT_BUILDINGS: dict[str, BuildingDefinition] = {
+    "city_center": BuildingDefinition(
+        name="city_center",
+        housing_capacity=10,
+        storage_capacity_tons=120.0,
+        unique=True,
+    ),
     "camp_center": BuildingDefinition(
         name="camp_center",
         housing_capacity=4,
@@ -706,12 +832,12 @@ DEFAULT_BUILDINGS: dict[str, BuildingDefinition] = {
     ),
     "forager_hut": BuildingDefinition(
         name="forager_hut",
-        daily_outputs={"food": 4.0},
+        daily_outputs={"food": 0.008},
         vacancies=2,
     ),
     "water_collector": BuildingDefinition(
         name="water_collector",
-        daily_outputs={"water": 7.0},
+        daily_outputs={"water": 0.012},
         affected_by_precipitation=True,
         vacancies=1,
     ),
@@ -723,19 +849,35 @@ DEFAULT_BUILDINGS: dict[str, BuildingDefinition] = {
         name="warehouse",
         storage_capacity_tons=250.0,
         construction_cost={"stone": 3.0, "roundwood": 2.0},
+        required_buildings=("city_center",),
+    ),
+    "pump": BuildingDefinition(
+        name="pump",
+        daily_outputs={"water": 0.08},
+        construction_cost={"roundwood": 2.0},
+        required_buildings=("city_center",),
+        affected_by_precipitation=True,
+        vacancies=1,
+    ),
+    "farm": BuildingDefinition(
+        name="farm",
+        daily_outputs={"food": 0.06},
+        construction_cost={"clay": 2.0, "roundwood": 1.0},
+        required_buildings=("city_center",),
+        vacancies=2,
     ),
     "quarry": BuildingDefinition(
         name="quarry",
         daily_outputs={"stone": 2.0, "sand": 1.0, "clay": 1.0},
         construction_cost={"stone": 4.0},
-        required_buildings=("warehouse",),
+        required_buildings=("city_center",),
         vacancies=3,
     ),
     "stone_quarry": BuildingDefinition(
         name="stone_quarry",
-        daily_outputs={"stone": 4.0, "raw_metal": 0.6},
+        daily_outputs={"stone": 4.0},
         construction_cost={"stone": 8.0, "roundwood": 2.0},
-        required_buildings=("warehouse",),
+        required_buildings=("city_center",),
         vacancies=4,
     ),
     "lumberjack_site": BuildingDefinition(
@@ -744,6 +886,15 @@ DEFAULT_BUILDINGS: dict[str, BuildingDefinition] = {
         construction_cost={"stone": 2.0, "tools": 0.2},
         required_buildings=("stone_quarry",),
         vacancies=4,
+    ),
+    "mine": BuildingDefinition(
+        name="mine",
+        daily_outputs={"raw_metal": 0.8},
+        construction_cost={"tools": 1.0, "roundwood": 6.0},
+        required_buildings=("city_center",),
+        vacancies=4,
+        allowed_biomes=("mountain",),
+        required_features=BUILDING_FEATURE_MOUNTAIN,
     ),
     "housing1": BuildingDefinition(
         name="housing1",
@@ -784,7 +935,7 @@ DEFAULT_BUILDINGS: dict[str, BuildingDefinition] = {
         name="brick_factory",
         recipes=[Recipe(inputs={"clay": 2.0}, outputs={"brick": 1.6})],
         construction_cost={"stone": 12.0, "roundwood": 4.0},
-        required_buildings=("stone_quarry",),
+        required_buildings=("quarry",),
         vacancies=6,
     ),
     "forge": BuildingDefinition(
@@ -803,7 +954,6 @@ DEFAULT_BUILDINGS: dict[str, BuildingDefinition] = {
         name="sawmill",
         recipes=[
             Recipe(inputs={"roundwood": 2.0}, outputs={"plank": 3.0, "sawdust": 1.0}),
-            Recipe(inputs={"wood": 2.0}, outputs={"plank": 3.0, "sawdust": 1.0})
         ],
         construction_cost={"stone": 8.0, "roundwood": 8.0},
         required_buildings=("lumberjack_site",),
@@ -825,10 +975,20 @@ DEFAULT_BUILDINGS: dict[str, BuildingDefinition] = {
         name="workshop",
         recipes=[
             Recipe(
-                inputs={"wood": 2.0, "stone": 1.0},
-                outputs={"roundwood": 1.0, "plank": 1.0},
+                inputs={"roundwood": 2.0, "stone": 1.0},
+                outputs={"plank": 2.0},
             )
         ],
+    ),
+    "boiler_house": BuildingDefinition(
+        name="boiler_house",
+        recipes=[
+            Recipe(inputs={"roundwood": 1.0}, outputs={ENERGY_RESOURCE: 0.04}),
+            Recipe(inputs={"coal": 0.5}, outputs={ENERGY_RESOURCE: 0.08}),
+        ],
+        construction_cost={"stone": 6.0, "roundwood": 4.0},
+        required_buildings=("city_center",),
+        vacancies=2,
     ),
     "wind_turbine": BuildingDefinition(
         name="wind_turbine",
@@ -842,8 +1002,8 @@ DEFAULT_BUILDINGS: dict[str, BuildingDefinition] = {
     ),
     "greenhouse": BuildingDefinition(
         name="greenhouse",
-        daily_inputs={"water": 3.0, "electricity": 1.0},
-        daily_outputs={"food": 8.0},
+        daily_inputs={"water": 0.03, "electricity": 1.0},
+        daily_outputs={"food": 0.08},
     ),
     "infirmary": BuildingDefinition(
         name="infirmary",
@@ -860,9 +1020,9 @@ DEFAULT_TECHNOLOGIES: dict[str, Technology] = {
         description="A staffed camp can distribute stored resources without currency.",
         required_buildings=("camp_center",),
     ),
-    "wood_processing": Technology(
-        id="wood_processing",
-        name="Wood processing",
+    "roundwood_processing": Technology(
+        id="roundwood_processing",
+        name="Roundwood processing",
         description="Boards and sawdust unlock more durable construction chains.",
         required_resources={"plank": 3.0},
     ),

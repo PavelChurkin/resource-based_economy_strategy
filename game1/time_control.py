@@ -17,10 +17,12 @@ exposing two operations:
 The controller uses an injectable ``clock`` callable so tests can step time
 without sleeping. A real client passes ``time.monotonic``.
 
-Version 0.0.5 keeps those defaults for compatibility and adds
+The original daily defaults remain available for compatibility. Version 0.0.5
+adds
 ``TimeController.weekly(...)``: normal mode advances one game week
 (seven daily simulation ticks) every five wall-clock seconds, matching the
 new game-loop requirement while still allowing planning during pause.
+Version 0.0.6 adds calendar labels where each month is exactly four weeks.
 """
 
 from __future__ import annotations
@@ -28,6 +30,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Mapping, Protocol
+
+
+DAYS_PER_WEEK = 7
+WEEKS_PER_MONTH = 4
+MONTHS_PER_YEAR = 12
+WEEKS_PER_YEAR = WEEKS_PER_MONTH * MONTHS_PER_YEAR
 
 
 class TimeMode(str, Enum):
@@ -72,14 +80,14 @@ class TimeController:
         simulation: TickableSimulation,
         clock: Callable[[], float],
     ) -> TimeController:
-        """Build the v0.0.5 clock: one week every five seconds."""
+        """Build the weekly clock: one game week every five seconds."""
 
         return cls(
             simulation=simulation,
             clock=clock,
             seconds_per_day_normal=5.0,
             seconds_per_day_fast=1.0,
-            game_days_per_tick=7,
+            game_days_per_tick=DAYS_PER_WEEK,
         )
 
     # ------------------------------------------------------------------
@@ -162,8 +170,28 @@ class TimeController:
     def skip_weeks(self, weeks: int) -> ExtrapolationResult:
         return self.fast_forward(weeks * 7)
 
-    def skip_months(self, months: int, days_per_month: int = 30) -> ExtrapolationResult:
+    def skip_months(
+        self,
+        months: int,
+        days_per_month: int = DAYS_PER_WEEK * WEEKS_PER_MONTH,
+    ) -> ExtrapolationResult:
         return self.fast_forward(months * days_per_month)
 
-    def skip_years(self, years: int, days_per_year: int = 360) -> ExtrapolationResult:
+    def skip_years(
+        self,
+        years: int,
+        days_per_year: int = DAYS_PER_WEEK * WEEKS_PER_YEAR,
+    ) -> ExtrapolationResult:
         return self.fast_forward(years * days_per_year)
+
+
+def calendar_label(day: int) -> str:
+    """Return the v0.0.6 week/month/year label for a zero-based day."""
+
+    if day < 0:
+        raise ValueError("day must be non-negative")
+    week_index = day // DAYS_PER_WEEK
+    week = week_index % WEEKS_PER_MONTH + 1
+    month = (week_index // WEEKS_PER_MONTH) % MONTHS_PER_YEAR + 1
+    year = week_index // WEEKS_PER_YEAR + 1
+    return f"Неделя {week} / Месяц {month} / Год {year}"

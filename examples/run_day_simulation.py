@@ -12,9 +12,9 @@ def main() -> None:
     settlement = create_empty_map_settlement(
         people=8,
         initial_resources={
-            "food": 160,
-            "water": 220,
-            "wood": 40,
+            "food": 1.6,
+            "water": 2.2,
+            "roundwood": 40,
             "stone": 20,
         },
         latitude=50,

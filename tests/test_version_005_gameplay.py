@@ -4,6 +4,7 @@ from game1.time_control import TimeController, TimeMode
 from resource_based_economy_strategy.scenarios import create_player_settlement
 from resource_based_economy_strategy.simulation import (
     Building,
+    DAYS_PER_YEAR,
     Person,
     Settlement,
     Weather,
@@ -58,8 +59,8 @@ class Version005GameplayTests(unittest.TestCase):
         self.assertEqual(settlement.people, 10)
         self.assertEqual(len(settlement.living_citizens()), 10)
         self.assertTrue(all(person.is_adult for person in settlement.living_citizens()))
-        self.assertGreaterEqual(settlement.inventory["food"], 10 * 1.8 * 360)
-        self.assertGreaterEqual(settlement.inventory["water"], 10 * 3.0 * 360)
+        self.assertGreaterEqual(settlement.inventory["food"], 10 * 0.002 * DAYS_PER_YEAR)
+        self.assertGreaterEqual(settlement.inventory["water"], 10 * 0.003 * DAYS_PER_YEAR)
 
     def test_children_do_not_count_as_workers(self) -> None:
         settlement = Settlement(
