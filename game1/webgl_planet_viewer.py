@@ -120,6 +120,20 @@ _VIEWER_TEMPLATE = """<!doctype html>
       pointer-events: none;
     }
 
+    #selectedPointMarker {
+      position: fixed;
+      width: 34px;
+      height: 34px;
+      display: none;
+      transform: translate(-50%, -50%);
+      border: 2px solid #f2c94c;
+      border-radius: 50%;
+      box-shadow: 0 0 0 3px rgba(242, 201, 76, 0.22),
+        0 0 18px rgba(242, 201, 76, 0.52);
+      pointer-events: none;
+      z-index: 2;
+    }
+
     .buildingMarker {
       position: absolute;
       width: 26px;
@@ -210,6 +224,21 @@ _VIEWER_TEMPLATE = """<!doctype html>
       white-space: normal;
     }
 
+    .resourceGrid span {
+      min-width: 0;
+    }
+
+    .resourceTrend {
+      display: inline-block;
+      width: 1em;
+      color: #9ba7b3;
+      text-align: center;
+    }
+
+    .resourceTrend.up { color: #5bd17d; }
+
+    .resourceTrend.down { color: #ff7b7b; }
+
     .statusLog {
       display: grid;
       gap: 4px;
@@ -221,7 +250,7 @@ _VIEWER_TEMPLATE = """<!doctype html>
 
     .buildingList {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: 1fr;
       gap: 6px;
     }
 
@@ -322,6 +351,25 @@ _VIEWER_TEMPLATE = """<!doctype html>
       line-height: 1.2;
     }
 
+    .buildingList button.unavailable {
+      color: rgba(230, 236, 242, 0.58);
+      border-color: rgba(230, 236, 242, 0.14);
+    }
+
+    .buildingActions {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .buildingActions button {
+      min-width: 0;
+      flex: 1 1 0;
+      height: 30px;
+      font-size: 11px;
+      padding: 0 6px;
+    }
+
     button:disabled {
       color: rgba(230, 236, 242, 0.42);
       cursor: not-allowed;
@@ -343,12 +391,64 @@ _VIEWER_TEMPLATE = """<!doctype html>
       font-size: 13px;
       display: none;
     }
+
+    @media (max-width: 720px) {
+      .topbar {
+        top: 8px;
+        left: 8px;
+        right: 8px;
+        transform: none;
+        max-width: none;
+        justify-content: flex-start;
+      }
+
+      .tools {
+        display: none;
+      }
+
+      .hud {
+        top: 154px;
+        left: 8px;
+        right: 8px;
+        max-width: none;
+        z-index: 2;
+      }
+
+      #stats,
+      #lod,
+      .hud .help {
+        display: none;
+      }
+
+      .sidebar {
+        left: 8px;
+        right: 8px;
+        top: 560px;
+        width: auto;
+        max-height: calc(100vh - 568px);
+      }
+
+      .panel {
+        white-space: normal;
+      }
+
+      .resourceGrid,
+      .buildingList,
+      .legendGrid {
+        grid-template-columns: 1fr;
+      }
+
+      .buildingList button {
+        white-space: normal;
+      }
+    }
   </style>
 </head>
 <body>
   <canvas id="planet" tabindex="0"></canvas>
   <canvas id="gridOverlay" aria-hidden="true"></canvas>
   <div id="buildingMarkers" aria-hidden="true"></div>
+  <div id="selectedPointMarker" aria-hidden="true"></div>
   <div class="hud" aria-live="polite">
     <div class="panel" id="stats"></div>
     <div class="panel" id="lod"></div>
@@ -357,6 +457,12 @@ _VIEWER_TEMPLATE = """<!doctype html>
       <kbd>Q</kbd><kbd>E</kbd> roll &middot;
       <kbd>+</kbd><kbd>-</kbd> zoom &middot;
       <kbd>R</kbd> reset
+    </div>
+    <div class="panel" id="resourcesPanel"></div>
+    <div class="panel" id="demographicsPanel"></div>
+    <div class="panel">
+      <h2>Статус</h2>
+      <div class="statusLog" id="statusLog"></div>
     </div>
   </div>
   <div class="topbar">
@@ -367,6 +473,8 @@ _VIEWER_TEMPLATE = """<!doctype html>
     <div class="panel compact" id="timePanel"></div>
     <button id="pauseButton" title="Pause or resume time" aria-label="Pause or resume time">▶</button>
     <button id="stepWeekButton" title="Advance one week" aria-label="Advance one week">↷</button>
+    <button id="skipMonthButton" title="Skip one month" aria-label="Skip one month">M</button>
+    <button id="skipYearButton" title="Skip one year" aria-label="Skip one year">Y</button>
     <button id="gridLayerButton" title="Toggle grid layer" aria-label="Toggle grid layer">⌗</button>
   </div>
   <div class="tools">
@@ -375,24 +483,14 @@ _VIEWER_TEMPLATE = """<!doctype html>
     <button id="reset" title="Reset camera" aria-label="Reset camera">R</button>
   </div>
   <aside class="sidebar">
-    <div class="panel" id="resourcesPanel"></div>
-    <div class="panel" id="demographicsPanel"></div>
     <div class="panel" id="selectedPointPanel"></div>
     <div class="panel">
       <h2>Постройки</h2>
       <div class="buildingList" id="buildingMenu"></div>
     </div>
     <div class="panel">
-      <h2>Политика</h2>
-      <div id="policyPanel"></div>
-    </div>
-    <div class="panel">
       <h2>Биомы</h2>
       <div class="legendGrid" id="biomeLegend"></div>
-    </div>
-    <div class="panel">
-      <h2>Статус</h2>
-      <div class="statusLog" id="statusLog"></div>
     </div>
   </aside>
   <div class="error" id="error"></div>
@@ -403,6 +501,7 @@ _VIEWER_TEMPLATE = """<!doctype html>
     const gridOverlay = document.getElementById("gridOverlay");
     const gridContext = gridOverlay.getContext("2d");
     const buildingMarkers = document.getElementById("buildingMarkers");
+    const selectedPointMarker = document.getElementById("selectedPointMarker");
     const stats = document.getElementById("stats");
     const lodPanel = document.getElementById("lod");
     const errorPanel = document.getElementById("error");
@@ -413,31 +512,26 @@ _VIEWER_TEMPLATE = """<!doctype html>
     const demographicsPanel = document.getElementById("demographicsPanel");
     const selectedPointPanel = document.getElementById("selectedPointPanel");
     const buildingMenu = document.getElementById("buildingMenu");
-    const policyPanel = document.getElementById("policyPanel");
     const biomeLegend = document.getElementById("biomeLegend");
     const statusLog = document.getElementById("statusLog");
 
     const ZOOM_MIN = 0.55;
     const ZOOM_MAX = 3.2;
-    const KEY_ROTATE_STEP = 0.05;
+    const KEY_ROTATE_STEP = 0.035;
+    const POINTER_ROTATE_STEP = 0.0035;
     const KEY_ZOOM_STEP = 1.10;
     const WEEK_SECONDS = 5; // tick every 5 seconds
     const DAYS_PER_WEEK = 7;
     const WEEKS_PER_MONTH = 4;
     const MONTHS_PER_YEAR = 12;
     const BIRTH_WEEKS = 8 * WEEKS_PER_MONTH;
+    const ADULT_WEEKS = 16 * WEEKS_PER_MONTH * MONTHS_PER_YEAR;
     const DAILY_FOOD_PER_PERSON = 0.002;
     const DAILY_WATER_PER_PERSON = 0.003;
     const FEATURE_RIVER = 1;
     const FEATURE_LAKE = 2;
     const FEATURE_MOUNTAIN = 4;
     const FEATURE_ISLAND = 8;
-    const POLICY_COLORS = {
-      own: "#2fb344",
-      neutral: "#2f80ed",
-      enemy: "#d63031",
-      ally: "#f2c94c",
-    };
     const BUILDINGS = [
       { id: "city_center", label: "Центр города", icon: "◎", cost: {}, requires: [], vacancies: 0, capacity: 10, unique: true },
       { id: "warehouse", label: "Склад", icon: "▣", cost: { stone: 3, roundwood: 2 }, requires: ["city_center"], vacancies: 0 },
@@ -456,6 +550,7 @@ _VIEWER_TEMPLATE = """<!doctype html>
       { id: "forge", label: "Кузня", cost: { stone: 18, roundwood: 6 }, requires: ["stone_quarry"], vacancies: 4 },
       { id: "sawmill", label: "Лесопилка", cost: { stone: 8, roundwood: 8 }, requires: ["lumberjack_site"], vacancies: 4 },
       { id: "foundry", label: "Литейный завод", cost: { stone: 20, brick: 10 }, requires: ["forge"], vacancies: 8 },
+      { id: "concrete_factory", label: "Бетонный завод", icon: "▧", cost: { brick: 12, stone: 10 }, requires: ["brick_factory"], vacancies: 6 },
       { id: "boiler_house", label: "Котельная", icon: "◈", cost: { stone: 6, roundwood: 4 }, requires: ["city_center"], vacancies: 2 },
     ];
     const gameState = {
@@ -465,6 +560,7 @@ _VIEWER_TEMPLATE = """<!doctype html>
       birthProgressWeeks: 0,
       selectedPoint: null,
       layers: { grid: false },
+      resourceTrends: {},
       resources: {
         food: 6.72,
         water: 10.08,
@@ -477,11 +573,15 @@ _VIEWER_TEMPLATE = """<!doctype html>
         coal: 8,
         energy_mw_day: 0,
       },
-      people: { adults: 10, children: 0 },
-      buildings: [
-        { id: "city_center", pointId: 0, relation: "own" },
-      ],
-      status: ["Игрок Игрок1 вошёл в игру: 10 жителей, запас еды и воды на год."],
+      people: {
+        adults: 10,
+        children: 0,
+        adultNames: ["Чел1", "Чел2", "Чел3", "Чел4", "Чел5", "Чел6", "Чел7", "Чел8", "Чел9", "Чел10"],
+        childrenAgeWeeks: [],
+        nextId: 11,
+      },
+      buildings: [],
+      status: ["Игрок Игрок1 вошёл в игру: выберите точку для центра города."],
     };
 
     let rotationX = -0.28;
@@ -676,9 +776,10 @@ _VIEWER_TEMPLATE = """<!doctype html>
     function calendarLabel(day) {
       const weekIndex = Math.floor(day / DAYS_PER_WEEK);
       const week = weekIndex % WEEKS_PER_MONTH + 1;
+      const absoluteWeek = weekIndex + 1;
       const month = Math.floor(weekIndex / WEEKS_PER_MONTH) % MONTHS_PER_YEAR + 1;
       const year = Math.floor(weekIndex / (WEEKS_PER_MONTH * MONTHS_PER_YEAR)) + 1;
-      return `Неделя ${week} / Месяц ${month} / Год ${year}`;
+      return `Неделя ${week} (${absoluteWeek}) / Месяц ${month} / Год ${year}`;
     }
 
     function resourceLabel(name) {
@@ -730,6 +831,10 @@ _VIEWER_TEMPLATE = """<!doctype html>
       return gameState.buildings.some((building) => building.id === id);
     }
 
+    function hasActiveBuilding(id) {
+      return gameState.buildings.some((building) => building.id === id && building.active !== false);
+    }
+
     function buildingAtPoint(pointId) {
       return gameState.buildings.find((building) => building.pointId === pointId) || null;
     }
@@ -740,20 +845,16 @@ _VIEWER_TEMPLATE = """<!doctype html>
       );
     }
 
-    function availableBuildings() {
-      return BUILDINGS.filter((building) =>
-        building.requires.every((required) => hasBuilding(required)) &&
-        (!building.unique || !hasBuilding(building.id)),
-      );
-    }
-
     function currentDemographics() {
       const vacancies = gameState.buildings.reduce((total, building) => {
+        if (building.active === false) return total;
         const definition = buildingDefinition(building.id);
         return total + (definition ? definition.vacancies || 0 : 0);
       }, 0);
-      const adults = gameState.people.adults;
-      const children = gameState.people.children;
+      const adults = gameState.people.adultNames.length;
+      const children = gameState.people.childrenAgeWeeks.length;
+      gameState.people.adults = adults;
+      gameState.people.children = children;
       return {
         adults,
         children,
@@ -764,6 +865,7 @@ _VIEWER_TEMPLATE = """<!doctype html>
 
     function housingCapacity() {
       return gameState.buildings.reduce((total, building) => {
+        if (building.active === false) return total;
         const definition = buildingDefinition(building.id);
         return total + (definition ? definition.capacity || 0 : 0);
       }, 0);
@@ -771,8 +873,14 @@ _VIEWER_TEMPLATE = """<!doctype html>
 
     function pushStatus(message) {
       gameState.status.unshift(message);
-      gameState.status = gameState.status.slice(0, 8);
       renderGameUi();
+    }
+
+    function resourceTrend(name) {
+      const delta = gameState.resourceTrends[name] || 0;
+      if (delta > 0.000001) return { symbol: "↑", className: "up" };
+      if (delta < -0.000001) return { symbol: "↓", className: "down" };
+      return { symbol: "·", className: "" };
     }
 
     function biomeName(index) {
@@ -833,9 +941,10 @@ _VIEWER_TEMPLATE = """<!doctype html>
       const resourceEntries = Object.entries(gameState.resources)
         .filter(([, amount]) => amount > 0.000001)
         .slice(0, 12)
-        .map(([name, amount]) =>
-          `<span>${resourceLabel(name)} ${amount.toFixed(3)} ${resourceUnit(name)}</span>`
-        )
+        .map(([name, amount]) => {
+          const trend = resourceTrend(name);
+          return `<span><span class="resourceTrend ${trend.className}">${trend.symbol}</span> ${resourceLabel(name)} ${amount.toFixed(3)} ${resourceUnit(name)}</span>`;
+        })
         .join("");
       resourcesPanel.innerHTML = `<h2>Склад</h2><div class="resourceGrid">${resourceEntries}</div>`;
       demographicsPanel.innerHTML =
@@ -865,46 +974,109 @@ _VIEWER_TEMPLATE = """<!doctype html>
           `<p>широта ${point.latitude.toFixed(1)}°, долгота ${point.longitude.toFixed(1)}°</p>` +
           `<p>постройка: ${
             existingBuilding
-              ? `${buildingIcon(existingBuilding.id)} ${buildingLabel(existingBuilding.id)}`
+              ? `${buildingIcon(existingBuilding.id)} ${buildingLabel(existingBuilding.id)} (${existingBuilding.active === false ? "выключена" : "активна"})`
               : "нет"
           }</p>` +
+          (
+            existingBuilding
+              ? `<p>работник: ${existingBuilding.workerName || "нет"}</p>` +
+                `<div class="buildingActions">` +
+                `<button type="button" data-building-action="toggle">${existingBuilding.active === false ? "Активировать" : "Выключить"}</button>` +
+                `<button type="button" data-building-action="demolish">Снести</button>` +
+                `</div>`
+              : ""
+          ) +
           `<details><summary>Климат года</summary>${climateSummaryForLatitude(point.latitude)}</details>`;
       }
 
       buildingMenu.innerHTML = "";
-      for (const building of availableBuildings()) {
+      for (const building of BUILDINGS) {
         const button = document.createElement("button");
         button.type = "button";
         button.textContent = `${building.icon || "□"} ${building.label} · ${formatCost(building.cost)}`;
-        const disabled =
-          gameState.selectedPoint === null ||
-          !canAfford(building.cost) ||
-          !canPlaceOnSelectedPoint(building);
-        button.disabled = disabled;
-        button.addEventListener("click", () => planBuilding(building));
+        const reason = buildingUnavailableReason(building);
+        if (reason) {
+          button.className = "unavailable";
+          button.title = reason;
+        }
+        button.addEventListener("click", () => {
+          const currentReason = buildingUnavailableReason(building);
+          if (currentReason) {
+            showUnavailablePopup(currentReason);
+            return;
+          }
+          planBuilding(building);
+        });
         buildingMenu.appendChild(button);
       }
 
-      policyPanel.innerHTML = Object.entries(POLICY_COLORS)
-        .map(([name, color]) => `<span style="color:${color}">■</span> ${name}`)
-        .join(" · ");
-      statusLog.innerHTML = gameState.status.map((item) => `<div>${item}</div>`).join("");
+      const recentStatus = gameState.status.slice(0, 8)
+        .map((item) => `<div>${item}</div>`)
+        .join("");
+      const fullStatus = gameState.status
+        .map((item) => `<div>${item}</div>`)
+        .join("");
+      statusLog.innerHTML =
+        recentStatus +
+        `<details><summary>Вся хронология (${gameState.status.length})</summary>${fullStatus}</details>`;
     }
 
     function canPlaceOnSelectedPoint(building) {
       if (gameState.selectedPoint === null) return false;
+      if (gameState.selectedPoint.biome === "ocean") return false;
       if (buildingAtPoint(gameState.selectedPoint.id)) return false;
       if (building.biome && gameState.selectedPoint.biome !== building.biome) return false;
       if (building.feature && (gameState.selectedPoint.features & building.feature) !== building.feature) return false;
       return true;
     }
 
+    function missingCostParts(cost) {
+      return Object.entries(cost || {})
+        .filter(([name, amount]) => (gameState.resources[name] || 0) + 1e-9 < amount)
+        .map(([name, amount]) => `${resourceLabel(name)} ${amount} ${resourceUnit(name)}`);
+    }
+
+    function buildingUnavailableReason(building) {
+      if (building.unique && hasBuilding(building.id)) {
+        return `${building.label} уже построен.`;
+      }
+      const missingRequirements = building.requires.filter((required) => !hasActiveBuilding(required));
+      if (missingRequirements.length) {
+        return `Нужна постройка: ${missingRequirements.map(buildingLabel).join(", ")}.`;
+      }
+      if (gameState.selectedPoint === null) {
+        return "Сначала выберите точку на максимальном LOD.";
+      }
+      if (gameState.selectedPoint.biome === "ocean") {
+        return "В биоме океана нельзя ничего строить.";
+      }
+      if (buildingAtPoint(gameState.selectedPoint.id)) {
+        return `Точка #${gameState.selectedPoint.id} уже занята.`;
+      }
+      if (building.biome && gameState.selectedPoint.biome !== building.biome) {
+        return `${building.label} можно строить только в биоме: ${biomeLabel(building.biome)}.`;
+      }
+      if (building.feature && (gameState.selectedPoint.features & building.feature) !== building.feature) {
+        return `${building.label} требует подходящую особенность точки.`;
+      }
+      const missing = missingCostParts(building.cost);
+      if (missing.length) {
+        return `Не хватает ресурсов: ${missing.join(", ")}.`;
+      }
+      return "";
+    }
+
+    function showUnavailablePopup(message) {
+      alert(message);
+      pushStatus(message);
+    }
+
     function planBuilding(building) {
-      if (
-        gameState.selectedPoint === null ||
-        !canAfford(building.cost) ||
-        !canPlaceOnSelectedPoint(building)
-      ) return;
+      const reason = buildingUnavailableReason(building);
+      if (reason) {
+        showUnavailablePopup(reason);
+        return;
+      }
       for (const [name, amount] of Object.entries(building.cost || {})) {
         gameState.resources[name] = Math.max(0, (gameState.resources[name] || 0) - amount);
       }
@@ -912,86 +1084,234 @@ _VIEWER_TEMPLATE = """<!doctype html>
         id: building.id,
         pointId: gameState.selectedPoint.id,
         relation: "own",
+        active: true,
+        workerName: null,
       });
-      focusPointById(gameState.selectedPoint.id);
       pushStatus(`${gameState.nickname}: ${building.label} запланирована в точке #${gameState.selectedPoint.id}.`);
+      renderSelectedPointMarker();
+      draw();
     }
 
-    function advanceWeek() {
-      gameState.day += 7;
-      const peopleBefore = gameState.people.adults + gameState.people.children;
-      const weeklyFood = DAILY_FOOD_PER_PERSON * DAYS_PER_WEEK;
-      const weeklyWater = DAILY_WATER_PER_PERSON * DAYS_PER_WEEK;
-      let peopleServed = 0;
+    function buildingAtSelectedPoint() {
+      if (gameState.selectedPoint === null) return null;
+      return buildingAtPoint(gameState.selectedPoint.id);
+    }
+
+    function toggleSelectedBuilding() {
+      const building = buildingAtSelectedPoint();
+      if (!building) return;
+      building.active = building.active === false;
+      building.workerName = null;
+      pushStatus(`${buildingLabel(building.id)} ${building.active ? "активирована" : "деактивирована"}.`);
+      draw();
+    }
+
+    function demolishSelectedBuilding() {
+      const building = buildingAtSelectedPoint();
+      if (!building) return;
+      gameState.buildings = gameState.buildings.filter((item) => item !== building);
+      pushStatus(`${buildingLabel(building.id)} снесена в точке #${building.pointId}.`);
+      draw();
+    }
+
+    function resourceSnapshot() {
+      return Object.fromEntries(
+        Object.entries(gameState.resources).map(([name, amount]) => [name, amount || 0]),
+      );
+    }
+
+    function updateResourceTrends(previous) {
+      const names = new Set([...Object.keys(previous), ...Object.keys(gameState.resources)]);
+      gameState.resourceTrends = {};
+      for (const name of names) {
+        gameState.resourceTrends[name] = (gameState.resources[name] || 0) - (previous[name] || 0);
+      }
+    }
+
+    function addResource(name, amount) {
+      gameState.resources[name] = (gameState.resources[name] || 0) + amount;
+    }
+
+    function takeResources(cost) {
+      if (!canAfford(cost)) return false;
+      for (const [name, amount] of Object.entries(cost || {})) {
+        gameState.resources[name] = Math.max(0, (gameState.resources[name] || 0) - amount);
+      }
+      return true;
+    }
+
+    function staffBuilding(building, availableWorkers) {
+      const definition = buildingDefinition(building.id);
+      const needed = Math.max(1, definition ? definition.vacancies || 1 : 1);
+      building.workerName = null;
+      if (building.active === false) return false;
+      if (availableWorkers.length < needed) return false;
+      const assigned = availableWorkers.splice(0, needed);
+      building.workerName = assigned.join(", ");
+      return true;
+    }
+
+    function consumeWeeklyNeeds() {
+      const adultFood = DAILY_FOOD_PER_PERSON * DAYS_PER_WEEK;
+      const adultWater = DAILY_WATER_PER_PERSON * DAYS_PER_WEEK;
       let deaths = 0;
-      for (let index = 0; index < peopleBefore; index += 1) {
-        if (
-          (gameState.resources.water || 0) + 1e-9 >= weeklyWater &&
-          (gameState.resources.food || 0) + 1e-9 >= weeklyFood
-        ) {
-          gameState.resources.water -= weeklyWater;
-          gameState.resources.food -= weeklyFood;
-          peopleServed += 1;
+      const adultSurvivors = [];
+      const childSurvivors = [];
+
+      for (const name of gameState.people.adultNames) {
+        if ((gameState.resources.food || 0) + 1e-9 >= adultFood && (gameState.resources.water || 0) + 1e-9 >= adultWater) {
+          gameState.resources.food -= adultFood;
+          gameState.resources.water -= adultWater;
+          adultSurvivors.push(name);
         } else {
           deaths += 1;
         }
       }
-      if (deaths > 0) {
-        const adultDeaths = Math.min(gameState.people.adults, deaths);
-        gameState.people.adults -= adultDeaths;
-        gameState.people.children = Math.max(0, gameState.people.children - (deaths - adultDeaths));
+
+      for (const child of gameState.people.childrenAgeWeeks) {
+        const childFood = adultFood * 0.5;
+        const childWater = adultWater * 0.5;
+        if ((gameState.resources.food || 0) + 1e-9 >= childFood && (gameState.resources.water || 0) + 1e-9 >= childWater) {
+          gameState.resources.food -= childFood;
+          gameState.resources.water -= childWater;
+          childSurvivors.push(child);
+        } else {
+          deaths += 1;
+        }
       }
 
+      gameState.people.adultNames = adultSurvivors;
+      gameState.people.childrenAgeWeeks = childSurvivors;
+      gameState.people.adults = adultSurvivors.length;
+      gameState.people.children = childSurvivors.length;
+      return deaths;
+    }
+
+    function runBuildingProduction() {
+      const availableWorkers = gameState.people.adultNames.slice();
       for (const building of gameState.buildings) {
+        building.workerName = null;
+        if (!["pump", "farm", "quarry", "stone_quarry", "lumberjack_site", "mine", "brick_factory", "forge", "concrete_factory", "boiler_house"].includes(building.id)) {
+          continue;
+        }
+        if (!staffBuilding(building, availableWorkers)) continue;
         if (building.id === "pump") {
-          gameState.resources.water = (gameState.resources.water || 0) + 0.08 * DAYS_PER_WEEK;
+          addResource("water", 0.08 * DAYS_PER_WEEK);
         }
         if (building.id === "farm") {
-          gameState.resources.food = (gameState.resources.food || 0) + 0.06 * DAYS_PER_WEEK;
+          addResource("food", 0.06 * DAYS_PER_WEEK);
         }
         if (building.id === "quarry") {
-          gameState.resources.stone = (gameState.resources.stone || 0) + 14;
-          gameState.resources.sand = (gameState.resources.sand || 0) + 7;
-          gameState.resources.clay = (gameState.resources.clay || 0) + 7;
+          addResource("stone", 14);
+          addResource("sand", 7);
+          addResource("clay", 7);
         }
         if (building.id === "stone_quarry") {
-          gameState.resources.stone = (gameState.resources.stone || 0) + 28;
+          addResource("stone", 28);
         }
         if (building.id === "lumberjack_site") {
-          gameState.resources.roundwood = (gameState.resources.roundwood || 0) + 28;
+          addResource("roundwood", 28);
         }
         if (building.id === "mine") {
-          gameState.resources.raw_metal = (gameState.resources.raw_metal || 0) + 5.6;
+          addResource("raw_metal", 5.6);
         }
-        if (building.id === "brick_factory" && (gameState.resources.clay || 0) >= 14) {
-          gameState.resources.clay -= 14;
-          gameState.resources.brick = (gameState.resources.brick || 0) + 11.2;
+        if (building.id === "brick_factory" && takeResources({ clay: 14 })) {
+          addResource("brick", 11.2);
         }
-        if (building.id === "boiler_house" && (gameState.resources.roundwood || 0) >= 7) {
-          gameState.resources.roundwood -= 7;
-          gameState.resources.energy_mw_day = (gameState.resources.energy_mw_day || 0) + 0.28;
+        if (building.id === "forge" && takeResources({ raw_metal: 10.5, roundwood: 3.5 })) {
+          addResource("tools", 7);
+        }
+        if (building.id === "concrete_factory" && takeResources({ sand: 14, raw_metal: 7 })) {
+          addResource("concrete", 8.4);
+        }
+        if (building.id === "boiler_house" && takeResources({ roundwood: 7 })) {
+          addResource("energy_mw_day", 0.28);
         }
       }
+    }
 
+    function advanceChildrenAges() {
+      const remainingChildren = [];
+      const adultMessages = [];
+      for (const child of gameState.people.childrenAgeWeeks) {
+        child.ageWeeks += 1;
+        if (child.ageWeeks >= ADULT_WEEKS) {
+          gameState.people.adultNames.push(child.name);
+          adultMessages.push(`${child.name} взрослеет.`);
+        } else {
+          remainingChildren.push(child);
+        }
+      }
+      gameState.people.childrenAgeWeeks = remainingChildren;
+      gameState.people.adults = gameState.people.adultNames.length;
+      gameState.people.children = remainingChildren.length;
+      return adultMessages;
+    }
+
+    function advanceBirths() {
+      const peopleAfter = gameState.people.adultNames.length + gameState.people.childrenAgeWeeks.length;
+      if (peopleAfter >= housingCapacity()) return [];
+      gameState.birthProgressWeeks += Math.floor(gameState.people.adultNames.length / 2);
+      const births = Math.floor(gameState.birthProgressWeeks / BIRTH_WEEKS);
+      if (births <= 0) return [];
+      const room = housingCapacity() - peopleAfter;
+      const actualBirths = Math.min(room, births);
+      const messages = [];
+      for (let index = 0; index < actualBirths; index += 1) {
+        const name = `Чел${gameState.people.nextId}`;
+        gameState.people.nextId += 1;
+        gameState.people.childrenAgeWeeks.push({ name, ageWeeks: 0 });
+        messages.push(`${name} родился.`);
+      }
+      gameState.birthProgressWeeks -= actualBirths * BIRTH_WEEKS;
+      gameState.people.children = gameState.people.childrenAgeWeeks.length;
+      return messages;
+    }
+
+    function advanceWeek(options = {}) {
+      gameState.day += 7;
+      const previousResources = resourceSnapshot();
+      const deaths = consumeWeeklyNeeds();
+      runBuildingProduction();
+      const adultMessages = advanceChildrenAges();
+      const birthMessages = deaths > 0 ? [] : advanceBirths();
+      updateResourceTrends(previousResources);
+
+      const weekNumber = Math.floor(gameState.day / DAYS_PER_WEEK);
       if (deaths > 0) {
-        pushStatus(`Неделя ${Math.floor(gameState.day / DAYS_PER_WEEK)}: ${deaths} жителей умерли от нехватки воды или еды одновременно.`);
+        pushStatus(`Неделя ${weekNumber}: ${deaths} жителей умерли от нехватки воды или еды.`);
         return;
       }
-
-      const peopleAfter = gameState.people.adults + gameState.people.children;
-      if (peopleServed === peopleBefore && peopleAfter < housingCapacity()) {
-        gameState.birthProgressWeeks += Math.floor(gameState.people.adults / 2);
-        const births = Math.floor(gameState.birthProgressWeeks / BIRTH_WEEKS);
-        if (births > 0) {
-          const room = housingCapacity() - peopleAfter;
-          const actualBirths = Math.min(room, births);
-          gameState.people.children += actualBirths;
-          gameState.birthProgressWeeks -= actualBirths * BIRTH_WEEKS;
-          pushStatus(`Неделя ${Math.floor(gameState.day / DAYS_PER_WEEK)}: родилось ${actualBirths}.`);
-          return;
-        }
+      for (const message of adultMessages) pushStatus(message);
+      for (const message of birthMessages) pushStatus(message);
+      if (!options.quiet) {
+        pushStatus(`Неделя ${weekNumber}: склад обновлён, время можно поставить на паузу.`);
+      } else {
+        renderGameUi();
       }
-      pushStatus(`Неделя ${Math.floor(gameState.day / DAYS_PER_WEEK)}: склад обновлён, время можно поставить на паузу.`);
+    }
+
+    function resourceRiskForWeeks(weeks) {
+      const adultNeeds = gameState.people.adultNames.length * weeks;
+      const childNeeds = gameState.people.childrenAgeWeeks.length * weeks * 0.5;
+      const projectedFood = (adultNeeds + childNeeds) * DAILY_FOOD_PER_PERSON * DAYS_PER_WEEK;
+      const projectedWater = (adultNeeds + childNeeds) * DAILY_WATER_PER_PERSON * DAYS_PER_WEEK;
+      const risks = [];
+      if ((gameState.resources.food || 0) + 1e-9 < projectedFood) risks.push("еды");
+      if ((gameState.resources.water || 0) + 1e-9 < projectedWater) risks.push("воды");
+      return risks.length ? `Есть риск нехватки ${risks.join(" и ")} при пропуске времени.` : "";
+    }
+
+    function advancePeriod(weeks, label) {
+      const risk = resourceRiskForWeeks(weeks);
+      if (risk && !window.confirm(`${risk} Продолжить?`)) {
+        pushStatus(`${label}: пропуск отменён.`);
+        return;
+      }
+      for (let index = 0; index < weeks; index += 1) {
+        advanceWeek({ quiet: true });
+      }
+      pushStatus(`${label}: пропущено ${weeks} недель с сохранением недельных вычислений.`);
     }
 
     function buildPerspective(aspect) {
@@ -1094,6 +1414,7 @@ _VIEWER_TEMPLATE = """<!doctype html>
       gl.bindVertexArray(null);
       drawGridLayer();
       renderBuildingMarkers();
+      renderSelectedPointMarker();
     }
 
     function projectPoint(matrix, x, y, z) {
@@ -1235,6 +1556,18 @@ _VIEWER_TEMPLATE = """<!doctype html>
       }
     }
 
+    function renderSelectedPointMarker() {
+      selectedPointMarker.style.display = "none";
+      if (!currentViewProjection || gameState.selectedPoint === null) return;
+      const point = pointVectorForId(gameState.selectedPoint.id);
+      if (!point || !frontFacingPoint(point.x, point.y, point.z)) return;
+      const projected = projectPoint(currentViewProjection, point.x, point.y, point.z);
+      if (!projected) return;
+      selectedPointMarker.style.display = "block";
+      selectedPointMarker.style.left = `${projected.x}px`;
+      selectedPointMarker.style.top = `${projected.y}px`;
+    }
+
     function focusPointById(pointId) {
       const point = pointVectorForId(pointId);
       if (!point) return;
@@ -1284,7 +1617,10 @@ _VIEWER_TEMPLATE = """<!doctype html>
         }
       }
       if (bestIndex >= 0) {
-        if (selectPointById(bestIndex)) pushStatus(`Выбрана точка #${bestIndex}.`);
+        if (selectPointById(bestIndex)) {
+          pushStatus(`Выбрана точка #${bestIndex}.`);
+          draw();
+        }
       }
     }
 
@@ -1304,7 +1640,14 @@ _VIEWER_TEMPLATE = """<!doctype html>
     }
 
     function clampPitch(value) {
-      return Math.max(-1.35, Math.min(1.35, value));
+      return value;
+    }
+
+    function wrapAngle(value) {
+      const fullTurn = Math.PI * 2;
+      while (value > Math.PI) value -= fullTurn;
+      while (value < -Math.PI) value += fullTurn;
+      return value;
     }
 
     function resetCamera() {
@@ -1336,12 +1679,12 @@ _VIEWER_TEMPLATE = """<!doctype html>
       const rotationStep = KEY_ROTATE_STEP * stepScale;
       let changed = false;
 
-      if (pressedKeys.has("w")) { rotationX = clampPitch(rotationX - rotationStep); changed = true; }
-      if (pressedKeys.has("s")) { rotationX = clampPitch(rotationX + rotationStep); changed = true; }
-      if (pressedKeys.has("a")) { rotationY -= rotationStep; changed = true; }
-      if (pressedKeys.has("d")) { rotationY += rotationStep; changed = true; }
-      if (pressedKeys.has("q")) { rotationZ -= rotationStep; changed = true; }
-      if (pressedKeys.has("e")) { rotationZ += rotationStep; changed = true; }
+      if (pressedKeys.has("w")) { rotationX = wrapAngle(clampPitch(rotationX - rotationStep)); changed = true; }
+      if (pressedKeys.has("s")) { rotationX = wrapAngle(clampPitch(rotationX + rotationStep)); changed = true; }
+      if (pressedKeys.has("a")) { rotationY = wrapAngle(rotationY - rotationStep); changed = true; }
+      if (pressedKeys.has("d")) { rotationY = wrapAngle(rotationY + rotationStep); changed = true; }
+      if (pressedKeys.has("q")) { rotationZ = wrapAngle(rotationZ - rotationStep); changed = true; }
+      if (pressedKeys.has("e")) { rotationZ = wrapAngle(rotationZ + rotationStep); changed = true; }
 
       if (changed) draw();
 
@@ -1376,8 +1719,8 @@ _VIEWER_TEMPLATE = """<!doctype html>
       pointerX = event.clientX;
       pointerY = event.clientY;
       if (Math.abs(dx) + Math.abs(dy) > 3) movedDuringDrag = true;
-      rotationY += dx * 0.008;
-      rotationX = clampPitch(rotationX + dy * 0.008);
+      rotationY = wrapAngle(rotationY + dx * POINTER_ROTATE_STEP);
+      rotationX = wrapAngle(clampPitch(rotationX + dy * POINTER_ROTATE_STEP));
       draw();
     });
 
@@ -1419,10 +1762,25 @@ _VIEWER_TEMPLATE = """<!doctype html>
       advanceWeek();
       canvas.focus({ preventScroll: true });
     });
+    document.getElementById("skipMonthButton").addEventListener("click", () => {
+      advancePeriod(WEEKS_PER_MONTH, "Месяц");
+      canvas.focus({ preventScroll: true });
+    });
+    document.getElementById("skipYearButton").addEventListener("click", () => {
+      advancePeriod(WEEKS_PER_MONTH * MONTHS_PER_YEAR, "Год");
+      canvas.focus({ preventScroll: true });
+    });
     document.getElementById("gridLayerButton").addEventListener("click", () => {
       gameState.layers.grid = !gameState.layers.grid;
       draw();
       pushStatus(gameState.layers.grid ? "Слой меридианов и параллелей включён." : "Слой меридианов и параллелей скрыт.");
+      canvas.focus({ preventScroll: true });
+    });
+    selectedPointPanel.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-building-action]");
+      if (!button) return;
+      if (button.dataset.buildingAction === "toggle") toggleSelectedBuilding();
+      if (button.dataset.buildingAction === "demolish") demolishSelectedBuilding();
       canvas.focus({ preventScroll: true });
     });
 

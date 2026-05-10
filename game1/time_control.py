@@ -23,6 +23,7 @@ adds
 (seven daily simulation ticks) every five wall-clock seconds, matching the
 new game-loop requirement while still allowing planning during pause.
 Version 0.0.6 adds calendar labels where each month is exactly four weeks.
+Version 0.0.7 includes the absolute week number in parentheses.
 """
 
 from __future__ import annotations
@@ -186,12 +187,13 @@ class TimeController:
 
 
 def calendar_label(day: int) -> str:
-    """Return the v0.0.6 week/month/year label for a zero-based day."""
+    """Return the week/month/year label for a zero-based day."""
 
     if day < 0:
         raise ValueError("day must be non-negative")
     week_index = day // DAYS_PER_WEEK
     week = week_index % WEEKS_PER_MONTH + 1
+    absolute_week = week_index + 1
     month = (week_index // WEEKS_PER_MONTH) % MONTHS_PER_YEAR + 1
     year = week_index // WEEKS_PER_YEAR + 1
-    return f"Неделя {week} / Месяц {month} / Год {year}"
+    return f"Неделя {week} ({absolute_week}) / Месяц {month} / Год {year}"

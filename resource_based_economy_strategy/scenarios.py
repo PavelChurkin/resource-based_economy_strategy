@@ -49,8 +49,9 @@ def create_player_settlement(
     *,
     latitude: float = 45.0,
     seed: int | None = None,
+    city_center_point_id: int | None = 0,
 ) -> Settlement:
-    """Create the v0.0.6 multiplayer-ready starting settlement."""
+    """Create the player settlement with optional placed city center."""
 
     people = 10
     daily_food = 0.002
@@ -75,19 +76,28 @@ def create_player_settlement(
             inventory["water"] += 60.0
         latitude = closest_tile.latitude
 
+    buildings = []
+    if city_center_point_id is not None:
+        buildings.append(
+            Building("city_center", point_id=city_center_point_id, owner=nickname)
+        )
+
     settlement = Settlement(
         people=people,
         inventory=inventory,
-        buildings=[
-            Building("city_center", point_id=0, owner=nickname),
-        ],
+        buildings=buildings,
         weather=Weather.for_planet_day(0, latitude=latitude),
         latitude=latitude,
         player_nickname=nickname,
         citizens=[Person.from_index(index) for index in range(1, people + 1)],
     )
-    settlement.status_events.append(
-        f"Игрок {nickname} вошёл в игру: создано 10 жителей."
-    )
+    if city_center_point_id is None:
+        settlement.status_events.append(
+            f"Игрок {nickname} вошёл в игру: выберите точку для центра города."
+        )
+    else:
+        settlement.status_events.append(
+            f"Игрок {nickname} вошёл в игру: создано 10 жителей."
+        )
     settlement.unlock_available_technologies()
     return settlement
