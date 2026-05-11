@@ -84,7 +84,7 @@ def run_managed_simulation(
         output = sys.stdout
 
     reason = "Заданное количество дней завершено."
-    print("Ресурсная стратегия 0.0.6", file=output)
+    print("Ресурсная стратегия 0.0.7", file=output)
     print(
         "Цель: сохранить жизнь поселения без денег, только через ресурсы.",
         file=output,

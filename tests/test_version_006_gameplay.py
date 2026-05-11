@@ -130,10 +130,10 @@ class Version006GameplayTests(unittest.TestCase):
         self.assertNotIn("food", report.produced)
 
     def test_calendar_label_uses_weeks_months_and_years(self) -> None:
-        self.assertEqual(calendar_label(0), "Неделя 1 / Месяц 1 / Год 1")
-        self.assertEqual(calendar_label(27), "Неделя 4 / Месяц 1 / Год 1")
-        self.assertEqual(calendar_label(28), "Неделя 1 / Месяц 2 / Год 1")
-        self.assertEqual(calendar_label(336), "Неделя 1 / Месяц 1 / Год 2")
+        self.assertEqual(calendar_label(0), "Неделя 1 (1) / Месяц 1 / Год 1")
+        self.assertEqual(calendar_label(27), "Неделя 4 (4) / Месяц 1 / Год 1")
+        self.assertEqual(calendar_label(28), "Неделя 1 (5) / Месяц 2 / Год 1")
+        self.assertEqual(calendar_label(336), "Неделя 1 (49) / Месяц 1 / Год 2")
 
 
 class WebglVersion006UiTests(unittest.TestCase):

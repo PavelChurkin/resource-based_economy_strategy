@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from math import floor, sin, tau
+from math import ceil, floor, sin, tau
 from typing import Mapping, Sequence
 
 
@@ -118,6 +118,7 @@ class Building:
     active: bool = True
     point_id: int | None = None
     owner: str | None = None
+    worker_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -318,9 +319,16 @@ class Settlement:
         active_buildings = {
             building.name for building in self.buildings if building.active
         }
+        existing_buildings = {building.name for building in self.buildings}
         available: list[str] = []
         for name, definition in self.config.building_definitions.items():
-            if definition.unique and name in active_buildings:
+            if definition.unique and name in existing_buildings:
+                continue
+            if (
+                "city_center" in self.config.building_definitions
+                and name != "city_center"
+                and "city_center" not in active_buildings
+            ):
                 continue
             if all(
                 requirement in active_buildings
@@ -343,10 +351,12 @@ class Settlement:
             raise ValueError(f"building {name!r} is not unlocked yet")
         definition = self.config.building_definitions[name]
         if point_id is not None and any(
-            building.active and building.point_id == point_id
+            building.point_id == point_id
             for building in self.buildings
         ):
             raise ValueError(f"point #{point_id} already has a building")
+        if point_biome == "ocean":
+            raise ValueError("buildings cannot be placed in ocean biome")
         if definition.allowed_biomes and point_biome not in definition.allowed_biomes:
             expected = ", ".join(definition.allowed_biomes)
             raise ValueError(f"building {name!r} can be placed only on: {expected}")
@@ -370,6 +380,33 @@ class Settlement:
         self.status_events.append(f"Запланирована постройка {name}{location}.")
         return building
 
+    def set_building_active(self, building: Building, active: bool) -> None:
+        if building not in self.buildings:
+            raise ValueError("building does not belong to this settlement")
+        building.active = active
+        if not active:
+            building.worker_ids = ()
+        state = "активирована" if active else "деактивирована"
+        self.status_events.append(f"Постройка {building.name} {state}.")
+
+    def demolish_building(self, building: Building) -> Building:
+        if building not in self.buildings:
+            raise ValueError("building does not belong to this settlement")
+        self.buildings.remove(building)
+        building.worker_ids = ()
+        self.status_events.append(f"Постройка {building.name} снесена.")
+        return building
+
+    def worker_names_for(self, building: Building) -> list[str]:
+        if not building.worker_ids:
+            return []
+        people_by_id = {person.id: person for person in self.citizens}
+        return [
+            people_by_id[worker_id].name
+            for worker_id in building.worker_ids
+            if worker_id in people_by_id
+        ]
+
     def tick(self, weather: Weather | None = None) -> DayReport:
         self._sync_people_from_citizens()
         event_start = len(self.status_events)
@@ -384,24 +421,32 @@ class Settlement:
 
         remaining_logistics = self.daily_logistics_capacity
         remaining_labor = self.daily_labor_capacity
+        available_worker_ids = [
+            person.id for person in self.living_citizens() if person.is_adult
+        ]
 
         for building in self.buildings:
+            building.worker_ids = ()
             if not building.active:
                 continue
             definition = self._definition_for(building)
             remaining_labor, remaining_logistics = self._apply_building_io(
+                building,
                 definition,
                 produced,
                 consumed,
                 remaining_labor,
                 remaining_logistics,
+                available_worker_ids,
             )
             remaining_labor, remaining_logistics = self._apply_recipes(
+                building,
                 definition,
                 transformed,
                 consumed,
                 remaining_labor,
                 remaining_logistics,
+                available_worker_ids,
             )
 
         (
@@ -485,23 +530,27 @@ class Settlement:
 
     def _apply_building_io(
         self,
+        building: Building,
         definition: BuildingDefinition,
         produced: Inventory,
         consumed: Inventory,
         remaining_labor: float,
         remaining_logistics: float,
+        available_worker_ids: list[str],
     ) -> tuple[float, float]:
         if not definition.daily_inputs and not definition.daily_outputs:
             return remaining_labor, remaining_logistics
         if not _has_resources(self.inventory, definition.daily_inputs):
             return remaining_labor, remaining_logistics
-        required_labor = float(definition.vacancies)
+        required_labor = max(1.0, float(definition.vacancies))
         if required_labor > remaining_labor:
             return remaining_labor, remaining_logistics
         transport_mass = sum(definition.daily_inputs.values()) + sum(
             definition.daily_outputs.values()
         )
         if transport_mass > remaining_logistics:
+            return remaining_labor, remaining_logistics
+        if not self._assign_workers(building, required_labor, available_worker_ids):
             return remaining_labor, remaining_logistics
         factor = self._weather_factor(definition)
         for resource, amount in definition.daily_inputs.items():
@@ -515,11 +564,13 @@ class Settlement:
 
     def _apply_recipes(
         self,
+        building: Building,
         definition: BuildingDefinition,
         transformed: Inventory,
         consumed: Inventory,
         remaining_labor: float,
         remaining_logistics: float,
+        available_worker_ids: list[str],
     ) -> tuple[float, float]:
         for recipe in definition.recipes:
             if remaining_labor < recipe.labor_days:
@@ -527,6 +578,12 @@ class Settlement:
             if remaining_logistics < recipe.transport_mass:
                 continue
             if not _has_resources(self.inventory, recipe.inputs):
+                continue
+            if not self._assign_workers(
+                building,
+                recipe.labor_days,
+                available_worker_ids,
+            ):
                 continue
             for resource, amount in recipe.inputs.items():
                 _take_resource(self.inventory, resource, amount)
@@ -537,6 +594,23 @@ class Settlement:
             remaining_labor -= recipe.labor_days
             remaining_logistics -= recipe.transport_mass
         return remaining_labor, remaining_logistics
+
+    def _assign_workers(
+        self,
+        building: Building,
+        required_labor: float,
+        available_worker_ids: list[str],
+    ) -> bool:
+        if required_labor <= 0:
+            return True
+        needed = max(1, ceil(required_labor))
+        if self.citizens:
+            if len(available_worker_ids) < needed:
+                return False
+            assigned = tuple(available_worker_ids[:needed])
+            del available_worker_ids[:needed]
+            building.worker_ids = (*building.worker_ids, *assigned)
+        return True
 
     def _consume_needs(
         self,
@@ -584,7 +658,12 @@ class Settlement:
 
         living = self.living_citizens()
         housing_shortfall = max(0, len(living) - self.housing_capacity)
-        total_need = sum(per_person_needs.values()) * len(living) + housing_shortfall
+        total_need = housing_shortfall
+        for person in living:
+            for resource, required in per_person_needs.items():
+                if not person.is_adult and resource in {"food", "water"}:
+                    required *= 0.5
+                total_need += required
         total_satisfied = 0.0
         consumed: Inventory = {}
         missing: Inventory = {}
@@ -596,6 +675,8 @@ class Settlement:
         for person in living:
             death_cause: str | None = None
             for resource, required in per_person_needs.items():
+                if not person.is_adult and resource in {"food", "water"}:
+                    required *= 0.5
                 available = self.inventory.get(resource, 0.0)
                 taken = min(available, required)
                 if taken > 0:
@@ -675,7 +756,7 @@ class Settlement:
             person.age_days += 1
             if was_child and person.is_adult:
                 self.status_events.append(
-                    f"{person.name} #{person.id} стал взрослым."
+                    f"{person.name} #{person.id} взрослеет."
                 )
 
         if needs_satisfied_ratio < 0.75:
@@ -970,6 +1051,18 @@ DEFAULT_BUILDINGS: dict[str, BuildingDefinition] = {
         construction_cost={"stone": 20.0, "brick": 10.0},
         required_buildings=("forge",),
         vacancies=8,
+    ),
+    "concrete_factory": BuildingDefinition(
+        name="concrete_factory",
+        recipes=[
+            Recipe(
+                inputs={"sand": 2.0, "raw_metal": 1.0},
+                outputs={"concrete": 1.2},
+            )
+        ],
+        construction_cost={"brick": 12.0, "stone": 10.0},
+        required_buildings=("brick_factory",),
+        vacancies=6,
     ),
     "workshop": BuildingDefinition(
         name="workshop",
